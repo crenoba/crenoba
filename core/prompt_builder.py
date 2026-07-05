@@ -3,10 +3,10 @@
 """
 CRENOBA Prompt Builder
 
-v0.7.3 수정:
-- command_parser에서 mode가 잘못 넘어오거나 general로 넘어와도
-  user_text 안의 /crenoba task 명령어를 다시 확인한다.
-- /crenoba task 입력이 반드시 CRENOBA TASK AGENT prompt로 변환되도록 한다.
+v0.8 수정:
+- /crenoba code Agent 고도화
+- 코드 오류, 에러 로그, 리팩토링 요청을 구조화된 디버깅 응답으로 변환
+- 기존 Task Agent 라우팅 안정화 유지
 """
 
 
@@ -52,7 +52,7 @@ def clean_command_text(text: str) -> str:
         if first_line.startswith(prefix):
             first_original = lines[0].strip()
 
-            # 첫 줄이 "/crenoba task 추가내용" 형태면 추가내용은 살린다.
+            # 첫 줄이 "/crenoba code 추가내용" 형태면 추가내용은 살린다.
             remaining_first_line = first_original[len(prefix):].strip()
 
             rest_lines = lines[1:]
@@ -157,7 +157,7 @@ def build_task_prompt(user_text: str) -> str:
     cleaned_text = clean_command_text(user_text)
 
     return f"""
-# CRENOBA TASK AGENT v0.7.3
+# CRENOBA TASK AGENT v0.7.4
 
 너는 CRENOBA의 Task Agent다.
 사용자의 할 일, 공부, 프로젝트, 개발 작업을 실행 가능한 계획으로 정리한다.
@@ -200,7 +200,6 @@ def build_task_prompt(user_text: str) -> str:
 - 너무 길게 설명하지 않는다.
 - 사용자가 바로 움직일 수 있게 쓴다.
 - 막연한 조언보다 실행 행동을 우선한다.
-- 필요하면 사용자의 입력이 부족하다고 말하되, 질문만 하지 말고 가능한 기본 계획을 먼저 제시한다.
 """.strip()
 
 
@@ -229,20 +228,52 @@ def build_code_prompt(user_text: str) -> str:
     cleaned_text = clean_command_text(user_text)
 
     return f"""
-# CRENOBA CODE AGENT
+# CRENOBA CODE AGENT v0.8
 
 너는 CRENOBA의 Code Agent다.
-사용자의 코딩, 디버깅, 리팩토링 작업을 돕는다.
+사용자의 코딩, 디버깅, 리팩토링, 에러 로그 분석 작업을 돕는다.
 
 ## 사용자의 입력
 {cleaned_text if cleaned_text else "사용자가 구체적인 코드 작업을 입력하지 않았음"}
 
-## 출력 형식
+## 역할
+사용자가 붙여넣은 코드, 에러 메시지, 터미널 로그, 원하는 기능 설명을 분석해서
+문제 원인과 해결 방향을 구조화해서 제시한다.
+
+## 출력 규칙
+반드시 아래 형식을 지켜라.
+
 ### 1. 문제 요약
-### 2. 원인 분석
-### 3. 해결 방향
-### 4. 수정 코드
-### 5. 테스트 방법
+- 사용자가 겪는 문제를 1~3문장으로 정리한다.
+
+### 2. 에러 위치 / 의심 위치
+- 에러 로그가 있으면 파일명, 줄 번호, 함수명, 변수명을 찾아 정리한다.
+- 에러 로그가 없으면 사용자의 설명에서 의심되는 위치를 추정한다.
+
+### 3. 원인 후보
+- 가능한 원인을 우선순위 순서로 정리한다.
+- 문법 오류, import 문제, 함수명 불일치, 경로 문제, 환경 문제, 로직 문제를 구분한다.
+
+### 4. 해결 단계
+- 사용자가 바로 따라 할 수 있게 순서대로 작성한다.
+- 먼저 확인할 것과 실제 수정할 것을 분리한다.
+
+### 5. 수정 코드
+- 코드 수정이 필요한 경우, 가능한 한 전체 파일 기준으로 제시한다.
+- 일부만 보여줘야 할 때는 어느 파일의 어느 부분인지 명확히 표시한다.
+
+### 6. 테스트 방법
+- 수정 후 실행할 명령어와 확인 기준을 제시한다.
+- 웹 서버, API, UI, 터미널 로그 확인 방법을 포함한다.
+
+### 7. Git 체크리스트
+- 수정이 끝난 뒤 git status, git add, git commit, git push 순서를 안내한다.
+
+## 답변 스타일
+- 한국어로 답한다.
+- 에러 원인을 먼저 짚고, 그다음 해결 방법을 제시한다.
+- 사용자가 복사해서 쓸 수 있는 명령어를 코드블록으로 제공한다.
+- 코드 수정 시 사용자의 선호에 맞게 가능하면 전체 파일 코드를 제공한다.
 """.strip()
 
 

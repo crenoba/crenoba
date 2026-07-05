@@ -3,11 +3,12 @@
 """
 CRENOBA Mock Provider
 
-v0.7.4 목표:
-- 실제 AI API 호출 없이 Agent 출력 구조를 테스트한다.
-- /crenoba task 입력 시 사용자의 할 일을 직접 분석한다.
-- 입력된 작업을 중요도 / 긴급도 / 예상 소요시간 기준으로 분류한다.
-- Task Agent 출력이 실제 업무 정리 도구처럼 보이도록 개선한다.
+v0.8 Hotfix
+- MockProvider class 복구
+- generate_response 진입점 복구
+- _mock_code_response 누락 문제 해결
+- Task Agent v0.7.4 기능 유지
+- Code Agent v0.8 응답 구조 추가
 """
 
 
@@ -17,13 +18,13 @@ v0.7.4 목표:
 
 def _extract_user_input(prompt: str) -> str:
     """
-    prompt 안에서 '사용자의 입력' 부분을 최대한 추출한다.
-    mock 응답에서 사용자의 원래 요청을 보여주기 위한 보조 함수다.
+    Prompt 안에서 '## 사용자의 입력' 아래 내용을 추출한다.
     """
     if not prompt:
         return ""
 
     marker = "## 사용자의 입력"
+
     if marker not in prompt:
         return prompt.strip()
 
@@ -44,10 +45,18 @@ def _extract_user_input(prompt: str) -> str:
     return after_marker.strip()
 
 
+def _format_bullet_list(items: list[str]) -> str:
+    if not items:
+        return "- 없음"
+
+    return "\n".join(f"- {item}" for item in items)
+
+
+# ============================================================
+# Task Agent v0.7.4
+# ============================================================
+
 def _clean_task_line(line: str) -> str:
-    """
-    사용자가 입력한 할 일 줄에서 -, *, 숫자. 같은 기호를 제거한다.
-    """
     cleaned = line.strip()
 
     prefixes = ["-", "*", "•", "·", "□", "☐", "✅", "✔"]
@@ -56,7 +65,6 @@ def _clean_task_line(line: str) -> str:
         if cleaned.startswith(prefix):
             cleaned = cleaned[len(prefix):].strip()
 
-    # 1. 할 일 / 1) 할 일 형태 제거
     if len(cleaned) >= 3:
         first = cleaned[0]
         second = cleaned[1]
@@ -68,10 +76,6 @@ def _clean_task_line(line: str) -> str:
 
 
 def _parse_tasks(user_input: str) -> list[str]:
-    """
-    사용자의 입력에서 할 일 후보를 추출한다.
-    줄 단위로 분석하고, 제목에 가까운 문장은 제외한다.
-    """
     if not user_input:
         return []
 
@@ -110,91 +114,31 @@ def _parse_tasks(user_input: str) -> list[str]:
     return tasks
 
 
-# ============================================================
-# Task 분석 로직
-# ============================================================
-
 def _estimate_minutes(task: str) -> int:
-    """
-    작업 이름을 기준으로 대략적인 예상 소요시간을 계산한다.
-    mock 단계이므로 규칙 기반으로 처리한다.
-    """
     lowered = task.lower()
 
-    very_short_keywords = [
-        "git status",
-        "확인",
-        "체크",
-        "메모",
-        "복사",
-    ]
-
-    short_keywords = [
-        "git",
-        "push",
-        "commit",
-        "업로드",
-        "정리",
-        "기록",
-        "저장",
-        "버튼 확인",
-    ]
-
-    medium_keywords = [
-        "수정",
-        "테스트",
-        "실행",
-        "ui",
-        "버튼",
-        "provider",
-        "prompt",
-        "프롬프트",
-        "과제",
-        "문제 풀이",
-        "자료 조사",
-    ]
-
-    long_keywords = [
-        "고도화",
-        "리팩토링",
-        "구현",
-        "개발",
-        "보고서",
-        "발표",
-        "프로젝트",
-        "시험",
-        "공부",
-        "apollo",
-        "opencv",
-        "arduino",
-        "설계",
-    ]
-
-    if any(keyword in lowered for keyword in very_short_keywords):
+    if any(keyword in lowered for keyword in ["확인", "체크", "메모", "git status"]):
         return 15
 
-    if any(keyword in lowered for keyword in short_keywords):
+    if any(keyword in lowered for keyword in ["git", "push", "commit", "업로드", "정리"]):
         return 30
 
-    if any(keyword in lowered for keyword in long_keywords):
-        return 90
-
-    if any(keyword in lowered for keyword in medium_keywords):
+    if any(keyword in lowered for keyword in ["수정", "테스트", "실행", "ui", "버튼", "prompt", "provider"]):
         return 60
+
+    if any(keyword in lowered for keyword in ["고도화", "리팩토링", "구현", "개발", "보고서", "공부", "시험"]):
+        return 90
 
     return 45
 
 
 def _detect_task_type(task: str) -> str:
-    """
-    작업 유형을 간단히 분류한다.
-    """
     lowered = task.lower()
 
     if any(keyword in lowered for keyword in ["git", "push", "commit", "github"]):
         return "Git 관리"
 
-    if any(keyword in lowered for keyword in ["ui", "버튼", "화면", "디자인", "style", "css", "html"]):
+    if any(keyword in lowered for keyword in ["ui", "버튼", "화면", "디자인", "css", "html"]):
         return "UI 작업"
 
     if any(keyword in lowered for keyword in ["코드", "구현", "리팩토링", "provider", "prompt", "parser", "agent"]):
@@ -213,10 +157,6 @@ def _detect_task_type(task: str) -> str:
 
 
 def _score_importance(task: str) -> int:
-    """
-    중요도 점수.
-    높을수록 먼저 해야 하는 작업이다.
-    """
     lowered = task.lower()
     score = 0
 
@@ -277,9 +217,6 @@ def _score_importance(task: str) -> int:
 
 
 def _score_urgency(task: str) -> int:
-    """
-    긴급도 점수.
-    """
     lowered = task.lower()
     score = 0
 
@@ -320,9 +257,6 @@ def _score_urgency(task: str) -> int:
 
 
 def _label_score(score: int) -> str:
-    """
-    점수를 보기 쉬운 라벨로 변환한다.
-    """
     if score >= 5:
         return "높음"
 
@@ -333,9 +267,6 @@ def _label_score(score: int) -> str:
 
 
 def _classify_task(task: str, importance_score: int, urgency_score: int) -> str:
-    """
-    작업을 must / optional / later 중 하나로 분류한다.
-    """
     lowered = task.lower()
 
     later_keywords = [
@@ -363,9 +294,6 @@ def _classify_task(task: str, importance_score: int, urgency_score: int) -> str:
 
 
 def _analyze_tasks(tasks: list[str]) -> dict:
-    """
-    task 목록을 받아서 분류 결과를 만든다.
-    """
     result = {
         "must": [],
         "optional": [],
@@ -401,12 +329,10 @@ def _analyze_tasks(tasks: list[str]) -> dict:
             reverse=True,
         )
 
-    # 반드시 해야 할 일이 하나도 없으면 optional의 첫 작업을 must로 올린다.
     if not result["must"] and result["optional"]:
         first_task = result["optional"].pop(0)
         result["must"].append(first_task)
 
-    # 그래도 아무 작업이 없으면 기본 작업 생성
     if not result["must"] and not result["optional"] and not result["later"]:
         result["must"].append({
             "title": "오늘 해야 할 일을 3개 이상 적기",
@@ -422,14 +348,7 @@ def _analyze_tasks(tasks: list[str]) -> dict:
     return result
 
 
-# ============================================================
-# Task 출력 포맷
-# ============================================================
-
 def _format_task_items(items: list[dict]) -> str:
-    """
-    작업 리스트를 markdown 번호 목록으로 만든다.
-    """
     if not items:
         return "- 없음"
 
@@ -447,9 +366,6 @@ def _format_task_items(items: list[dict]) -> str:
 
 
 def _make_30min_plan(analysis: dict) -> str:
-    """
-    must 작업을 중심으로 30분 단위 실행 계획을 만든다.
-    """
     ordered_tasks = analysis["must"] + analysis["optional"] + analysis["later"]
 
     if not ordered_tasks:
@@ -505,9 +421,6 @@ def _make_30min_plan(analysis: dict) -> str:
 
 
 def _get_next_action(analysis: dict) -> str:
-    """
-    지금 바로 할 다음 행동 1개를 정한다.
-    """
     if analysis["must"]:
         first = analysis["must"][0]["title"]
         return f"지금 바로 **{first}** 작업을 열고, 첫 30분 동안 진행할 수 있는 단계부터 시작하세요."
@@ -541,9 +454,6 @@ def _make_summary(analysis: dict) -> str:
 
 
 def _make_focus_message(analysis: dict) -> str:
-    """
-    작업량을 보고 사용자에게 오늘의 운영 전략을 알려준다.
-    """
     total_minutes = sum(
         item["minutes"]
         for group in analysis.values()
@@ -563,10 +473,6 @@ def _make_focus_message(analysis: dict) -> str:
 
     return "오늘은 핵심 작업을 먼저 끝내고, 남은 시간에 정리 작업을 붙이는 방식이 좋습니다."
 
-
-# ============================================================
-# Agent별 mock 응답
-# ============================================================
 
 def _mock_task_response(prompt: str) -> str:
     user_input = _extract_user_input(prompt)
@@ -649,6 +555,308 @@ def _mock_task_response(prompt: str) -> str:
 """.strip()
 
 
+# ============================================================
+# Code Agent v0.8
+# ============================================================
+
+def _detect_error_type(user_input: str) -> str:
+    lowered = user_input.lower()
+
+    if "syntaxerror" in lowered or "invalid syntax" in lowered:
+        return "문법 오류"
+
+    if "importerror" in lowered or "modulenotfounderror" in lowered or "cannot import" in lowered:
+        return "import / 모듈 연결 오류"
+
+    if "nameerror" in lowered or "not defined" in lowered:
+        return "변수 또는 함수 이름 오류"
+
+    if "attributeerror" in lowered or "has no attribute" in lowered:
+        return "객체 속성 / 메서드 오류"
+
+    if "typeerror" in lowered:
+        return "자료형 또는 함수 호출 방식 오류"
+
+    if "filenotfounderror" in lowered or "no such file" in lowered:
+        return "파일 경로 오류"
+
+    if "unicode" in lowered or "decode" in lowered or "utf-8" in lowered:
+        return "인코딩 오류"
+
+    if "404" in lowered or "500" in lowered or "http" in lowered:
+        return "API / 서버 응답 오류"
+
+    if "uvicorn" in lowered or "fastapi" in lowered:
+        return "FastAPI 서버 실행 오류"
+
+    if "button" in lowered or "onclick" in lowered or "addeventlistener" in lowered:
+        return "프론트엔드 이벤트 연결 오류"
+
+    if "git" in lowered:
+        return "Git 작업 오류"
+
+    return "일반 코드 문제"
+
+
+def _extract_file_hints(user_input: str) -> list[str]:
+    hints = []
+
+    candidates = [
+        "main.py",
+        "config.py",
+        "core/command_parser.py",
+        "core/prompt_builder.py",
+        "core/ai_client.py",
+        "providers/mock_provider.py",
+        "providers/gemini_provider.py",
+        "providers/openai_provider.py",
+        "static/index.html",
+        "static/style.css",
+        "static/app.js",
+        ".env",
+        "requirements.txt",
+    ]
+
+    lowered = user_input.lower()
+
+    for candidate in candidates:
+        if candidate.lower() in lowered:
+            hints.append(candidate)
+
+    return hints
+
+
+def _extract_line_hints(user_input: str) -> list[str]:
+    hints = []
+
+    for line in user_input.splitlines():
+        lowered = line.lower()
+
+        if "line" in lowered or "줄" in lowered or "file" in lowered or "파일" in lowered:
+            hints.append(line.strip())
+
+    return hints[:5]
+
+
+def _make_code_cause_candidates(error_type: str, user_input: str) -> list[str]:
+    lowered = user_input.lower()
+
+    if "mock response" in lowered and "code" in lowered:
+        return [
+            "/crenoba code가 Code Agent가 아니라 General Agent로 라우팅되고 있을 수 있습니다.",
+            "prompt_builder에서 CRENOBA CODE AGENT 문자열이 생성되지 않았을 수 있습니다.",
+            "mock_provider의 generate_response에서 CRENOBA CODE AGENT 분기 조건이 맞지 않을 수 있습니다.",
+        ]
+
+    if error_type == "문법 오류":
+        return [
+            "괄호, 따옴표, 콜론, 들여쓰기 중 하나가 깨졌을 가능성이 큽니다.",
+            "PowerShell 명령어 안에서 줄바꿈이나 따옴표가 Python 문자열을 깨뜨렸을 수 있습니다.",
+            "복사한 코드 일부가 누락되었을 가능성이 있습니다.",
+        ]
+
+    if error_type == "import / 모듈 연결 오류":
+        return [
+            "import하려는 함수 또는 클래스 이름이 실제 파일에 존재하지 않을 수 있습니다.",
+            "파일명은 맞지만 함수명이 다르거나 아직 정의되지 않았을 수 있습니다.",
+            "현재 실행 위치가 프로젝트 루트가 아닐 수 있습니다.",
+        ]
+
+    if error_type == "변수 또는 함수 이름 오류":
+        return [
+            "변수명 또는 함수명의 대소문자가 일치하지 않을 가능성이 큽니다.",
+            "정의되기 전에 함수를 호출했을 수 있습니다.",
+            "이전 버전 이름을 새 코드에서 그대로 사용했을 수 있습니다.",
+        ]
+
+    if error_type == "객체 속성 / 메서드 오류":
+        return [
+            "객체에 generate, call, run 같은 메서드가 없을 수 있습니다.",
+            "provider 구조가 함수형인지 클래스형인지 통일되지 않았을 수 있습니다.",
+            "어댑터가 실제 provider 객체를 제대로 감싸지 못했을 수 있습니다.",
+        ]
+
+    if error_type == "인코딩 오류":
+        return [
+            ".env 또는 코드 파일이 UTF-8이 아닌 형식으로 저장되었을 수 있습니다.",
+            "PowerShell copy 명령으로 생성한 파일이 UTF-16으로 저장되었을 수 있습니다.",
+            "python-dotenv가 UTF-8로 읽는 과정에서 실패했을 수 있습니다.",
+        ]
+
+    if error_type == "프론트엔드 이벤트 연결 오류":
+        return [
+            "HTML의 id와 app.js의 getElementById 이름이 일치하지 않을 수 있습니다.",
+            "script 경로가 잘못되어 app.js가 로드되지 않았을 수 있습니다.",
+            "브라우저 캐시 때문에 이전 JS 파일이 실행되고 있을 수 있습니다.",
+        ]
+
+    if error_type == "Git 작업 오류":
+        return [
+            "Git 사용자 이름과 이메일이 설정되지 않았을 수 있습니다.",
+            "commit 전에 git add가 되지 않았을 수 있습니다.",
+            "원격 저장소와 로컬 브랜치 상태가 달라 push가 거절되었을 수 있습니다.",
+        ]
+
+    return [
+        "에러 로그의 마지막 줄을 기준으로 원인을 확인해야 합니다.",
+        "수정한 파일과 실제 실행 중인 파일이 다를 수 있습니다.",
+        "서버 재시작 또는 브라우저 강력 새로고침이 누락되었을 수 있습니다.",
+    ]
+
+
+def _make_code_solution_steps(error_type: str) -> list[str]:
+    if error_type == "import / 모듈 연결 오류":
+        return [
+            "에러 메시지에서 import 실패한 함수명 또는 클래스명을 확인한다.",
+            "해당 함수가 실제 파일에 정의되어 있는지 확인한다.",
+            "main.py 또는 ai_client.py에서 import하는 이름과 실제 함수명을 맞춘다.",
+            "서버를 재시작해서 import 에러가 사라졌는지 확인한다.",
+        ]
+
+    if error_type == "인코딩 오류":
+        return [
+            ".env 파일을 UTF-8로 다시 생성한다.",
+            "비밀키가 필요한 경우 직접 다시 입력한다.",
+            "서버를 재실행해서 dotenv 로딩이 성공하는지 확인한다.",
+        ]
+
+    if error_type == "프론트엔드 이벤트 연결 오류":
+        return [
+            "static/index.html의 버튼 id를 확인한다.",
+            "static/app.js의 getElementById 값과 비교한다.",
+            "script src 경로가 /app.js인지 확인한다.",
+            "브라우저에서 Ctrl + Shift + R로 강력 새로고침한다.",
+        ]
+
+    if error_type == "Git 작업 오류":
+        return [
+            "git status로 현재 staged / unstaged 상태를 확인한다.",
+            "user.name과 user.email 설정 여부를 확인한다.",
+            "git add, commit, push 순서로 다시 진행한다.",
+        ]
+
+    return [
+        "에러 로그의 마지막 줄을 먼저 확인한다.",
+        "에러가 발생한 파일과 줄 번호를 찾는다.",
+        "최근 수정한 파일부터 되돌아보며 원인을 좁힌다.",
+        "수정 후 같은 명령어로 다시 실행한다.",
+    ]
+
+
+def _mock_code_response(prompt: str) -> str:
+    user_input = _extract_user_input(prompt)
+    error_type = _detect_error_type(user_input)
+    file_hints = _extract_file_hints(user_input)
+    line_hints = _extract_line_hints(user_input)
+    cause_candidates = _make_code_cause_candidates(error_type, user_input)
+    solution_steps = _make_code_solution_steps(error_type)
+
+    if file_hints:
+        file_text = "\n".join(f"- {file}" for file in file_hints)
+    else:
+        file_text = "- 아직 특정 파일이 감지되지 않았습니다. 에러 로그의 파일명 또는 수정한 파일명을 함께 넣으면 더 정확해집니다."
+
+    if line_hints:
+        line_text = "\n".join(f"- {line}" for line in line_hints)
+    else:
+        line_text = "- 아직 줄 번호 정보가 감지되지 않았습니다."
+
+    return f"""
+# CRENOBA Code Agent v0.8
+
+입력 내용:
+{user_input}
+
+---
+
+## 1. 문제 요약
+
+현재 입력은 **{error_type}** 유형으로 판단됩니다.
+
+Code Agent 기준으로 보면, 먼저 에러 로그의 마지막 줄과 최근 수정한 파일을 기준으로 원인을 좁혀야 합니다.
+
+---
+
+## 2. 에러 위치 / 의심 위치
+
+감지된 파일 후보:
+
+{file_text}
+
+감지된 줄 번호 / 로그 힌트:
+
+{line_text}
+
+---
+
+## 3. 원인 후보
+
+{_format_bullet_list(cause_candidates)}
+
+---
+
+## 4. 해결 단계
+
+{_format_bullet_list(solution_steps)}
+
+---
+
+## 5. 수정 코드
+
+현재 mock provider 단계에서는 실제 코드를 자동 수정하지는 않습니다.
+
+다만 다음 방식으로 수정하는 것이 좋습니다.
+
+1. 에러가 난 파일을 연다.
+2. 에러 메시지에 나온 함수명 / 변수명 / import 이름을 확인한다.
+3. 실제 파일에 존재하는 이름과 호출하는 이름을 일치시킨다.
+4. 수정 후 서버를 재실행한다.
+
+코드 수정이 필요한 경우에는 해당 파일 전체 코드를 입력하면, CRENOBA Code Agent가 전체 파일 기준으로 수정안을 만들도록 설계할 수 있습니다.
+
+---
+
+## 6. 테스트 방법
+
+FastAPI 서버 기준 테스트:
+
+uvicorn main:app --reload
+
+브라우저 UI 테스트:
+
+http://127.0.0.1:8000
+Ctrl + Shift + R
+
+명령어 라우팅 테스트:
+
+python -c "from core.prompt_builder import build_prompt; print(build_prompt('/crenoba code' + chr(10) + 'test')[:80])"
+
+정상 기준:
+
+# CRENOBA CODE AGENT v0.8
+
+---
+
+## 7. Git 체크리스트
+
+수정이 끝나면 아래 순서로 GitHub에 올립니다.
+
+git status
+git add .
+git commit -m "Improve code agent debugging response"
+git push origin main
+git status
+
+마지막 git status에서 아래처럼 나오면 완료입니다.
+
+nothing to commit, working tree clean
+""".strip()
+
+
+# ============================================================
+# 기타 Agent 응답
+# ============================================================
+
 def _mock_study_response(prompt: str) -> str:
     user_input = _extract_user_input(prompt)
 
@@ -680,39 +888,6 @@ def _mock_study_response(prompt: str) -> str:
 ## 5. 확인 문제
 - 이 개념을 한 문장으로 설명할 수 있는가?
 - 공식이 어디서 나왔는지 이해했는가?
-""".strip()
-
-
-def _mock_code_response(prompt: str) -> str:
-    user_input = _extract_user_input(prompt)
-
-    return f"""
-# CRENOBA Code Agent
-
-입력 내용:
-{user_input}
-
-## 1. 문제 요약
-입력된 코드 작업 또는 오류를 기준으로 문제를 분석해야 합니다.
-
-## 2. 원인 분석
-- 에러 메시지 확인
-- 관련 파일 확인
-- 함수 이름, import, 경로 문제 확인
-
-## 3. 해결 방향
-1. 에러가 발생한 줄 찾기
-2. 관련 함수나 변수 확인하기
-3. 수정 후 다시 실행하기
-
-## 4. 수정 코드
-현재는 mock provider 단계이므로 실제 코드 수정은 입력된 코드 확인 후 진행합니다.
-
-## 5. 테스트 방법
-- 서버 실행
-- 브라우저 접속
-- 기능 클릭 테스트
-- 터미널 에러 확인
 """.strip()
 
 
@@ -827,13 +1002,14 @@ def _mock_relay_response(prompt: str) -> str:
 {user_input}
 
 ## 1. 현재 버전
-CRENOBA v0.7.x
+CRENOBA v0.8
 
 ## 2. 완료된 작업
 - Core Agent 기본 구조
 - mock provider 연결
 - Web UI 연결
-- Task Agent 고도화 진행
+- Task Agent v0.7.4 고도화 완료
+- Code Agent v0.8 고도화 진행
 
 ## 3. 중요한 결정
 - CRENOBA는 브랜드형 챗봇이 아니라 목적별 업무 보조 Agent 시스템이다.
@@ -844,8 +1020,7 @@ CRENOBA v0.7.x
 현재 mock provider 기반으로 Agent 응답 구조를 테스트 중입니다.
 
 ## 5. 다음 작업
-- Task Agent 입력 분석 고도화
-- Code Agent 고도화
+- Code Agent 실제 코드 수정 응답 강화
 - Project Agent 고도화
 - 실제 AI Provider 연결 안정화
 
@@ -864,7 +1039,7 @@ def _mock_default_response(prompt: str) -> str:
 {user_input}
 
 현재 mock provider가 정상 작동 중입니다.
-Agent별 고도화는 v0.7부터 순서대로 진행합니다.
+Agent별 고도화는 v0.8부터 Code Agent 중심으로 진행합니다.
 """.strip()
 
 
@@ -874,30 +1049,32 @@ Agent별 고도화는 v0.7부터 순서대로 진행합니다.
 
 def generate_response(prompt: str) -> str:
     """
-    main.py 또는 ai_client.py에서 호출할 수 있는 mock 응답 함수.
+    main.py 또는 ai_client.py에서 호출하는 mock provider 진입점.
     """
     if not prompt:
         return _mock_default_response("")
 
-    if "CRENOBA TASK AGENT" in prompt:
+    upper_prompt = prompt.upper()
+
+    if "CRENOBA TASK AGENT" in upper_prompt:
         return _mock_task_response(prompt)
 
-    if "CRENOBA STUDY AGENT" in prompt:
+    if "CRENOBA STUDY AGENT" in upper_prompt:
         return _mock_study_response(prompt)
 
-    if "CRENOBA CODE AGENT" in prompt:
+    if "CRENOBA CODE AGENT" in upper_prompt:
         return _mock_code_response(prompt)
 
-    if "CRENOBA REPORT AGENT" in prompt:
+    if "CRENOBA REPORT AGENT" in upper_prompt:
         return _mock_report_response(prompt)
 
-    if "CRENOBA PROJECT AGENT" in prompt:
+    if "CRENOBA PROJECT AGENT" in upper_prompt:
         return _mock_project_response(prompt)
 
-    if "CRENOBA APOLLO AGENT" in prompt:
+    if "CRENOBA APOLLO AGENT" in upper_prompt:
         return _mock_apollo_response(prompt)
 
-    if "CRENOBA RELAY AGENT" in prompt:
+    if "CRENOBA RELAY AGENT" in upper_prompt:
         return _mock_relay_response(prompt)
 
     return _mock_default_response(prompt)
@@ -905,8 +1082,7 @@ def generate_response(prompt: str) -> str:
 
 class MockProvider:
     """
-    Mock Provider 클래스.
-    ai_client.py에서 class 방식으로 호출해도 동작하도록 유지한다.
+    ai_client.py에서 class 방식으로 호출할 수 있게 하는 Mock Provider.
     """
 
     def generate(self, prompt: str) -> str:
