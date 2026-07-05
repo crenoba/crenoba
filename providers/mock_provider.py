@@ -3,10 +3,11 @@
 """
 CRENOBA Mock Provider
 
-v0.7.2 목표:
+v0.7.4 목표:
 - 실제 AI API 호출 없이 Agent 출력 구조를 테스트한다.
 - /crenoba task 입력 시 사용자의 할 일을 직접 분석한다.
 - 입력된 작업을 중요도 / 긴급도 / 예상 소요시간 기준으로 분류한다.
+- Task Agent 출력이 실제 업무 정리 도구처럼 보이도록 개선한다.
 """
 
 
@@ -49,7 +50,7 @@ def _clean_task_line(line: str) -> str:
     """
     cleaned = line.strip()
 
-    prefixes = ["-", "*", "•", "·"]
+    prefixes = ["-", "*", "•", "·", "□", "☐", "✅", "✔"]
 
     for prefix in prefixes:
         if cleaned.startswith(prefix):
@@ -63,24 +64,27 @@ def _clean_task_line(line: str) -> str:
         if first.isdigit() and second in [".", ")"]:
             cleaned = cleaned[2:].strip()
 
-    return cleaned
+    return cleaned.strip()
 
 
 def _parse_tasks(user_input: str) -> list[str]:
     """
     사용자의 입력에서 할 일 후보를 추출한다.
-    줄 단위로 분석하고, 비어 있거나 제목에 가까운 문장은 제외한다.
+    줄 단위로 분석하고, 제목에 가까운 문장은 제외한다.
     """
     if not user_input:
         return []
 
-    ignore_lines = [
+    ignore_lines = {
         "오늘 해야 할 일",
         "해야 할 일",
         "할 일",
+        "오늘 할 일",
         "task",
+        "todo",
+        "to do",
         "사용자가 구체적인 할 일을 입력하지 않았음",
-    ]
+    }
 
     tasks = []
 
@@ -90,7 +94,7 @@ def _parse_tasks(user_input: str) -> list[str]:
         if not line:
             continue
 
-        normalized = line.replace(":", "").strip()
+        normalized = line.replace(":", "").strip().lower()
 
         if normalized in ignore_lines:
             continue
@@ -98,8 +102,6 @@ def _parse_tasks(user_input: str) -> list[str]:
         if line.startswith("/crenoba"):
             continue
 
-        # 너무 긴 문장은 설명일 가능성이 있으므로 그대로 하나의 작업 후보로 넣되,
-        # 앞뒤 공백만 정리한다.
         tasks.append(line)
 
     if not tasks and user_input.strip():
@@ -108,6 +110,10 @@ def _parse_tasks(user_input: str) -> list[str]:
     return tasks
 
 
+# ============================================================
+# Task 분석 로직
+# ============================================================
+
 def _estimate_minutes(task: str) -> int:
     """
     작업 이름을 기준으로 대략적인 예상 소요시간을 계산한다.
@@ -115,16 +121,23 @@ def _estimate_minutes(task: str) -> int:
     """
     lowered = task.lower()
 
+    very_short_keywords = [
+        "git status",
+        "확인",
+        "체크",
+        "메모",
+        "복사",
+    ]
+
     short_keywords = [
         "git",
         "push",
         "commit",
-        "status",
-        "확인",
+        "업로드",
         "정리",
-        "메모",
-        "copy",
-        "복사",
+        "기록",
+        "저장",
+        "버튼 확인",
     ]
 
     medium_keywords = [
@@ -137,6 +150,8 @@ def _estimate_minutes(task: str) -> int:
         "prompt",
         "프롬프트",
         "과제",
+        "문제 풀이",
+        "자료 조사",
     ]
 
     long_keywords = [
@@ -152,7 +167,11 @@ def _estimate_minutes(task: str) -> int:
         "apollo",
         "opencv",
         "arduino",
+        "설계",
     ]
+
+    if any(keyword in lowered for keyword in very_short_keywords):
+        return 15
 
     if any(keyword in lowered for keyword in short_keywords):
         return 30
@@ -166,60 +185,179 @@ def _estimate_minutes(task: str) -> int:
     return 45
 
 
-def _classify_task(task: str) -> str:
+def _detect_task_type(task: str) -> str:
+    """
+    작업 유형을 간단히 분류한다.
+    """
+    lowered = task.lower()
+
+    if any(keyword in lowered for keyword in ["git", "push", "commit", "github"]):
+        return "Git 관리"
+
+    if any(keyword in lowered for keyword in ["ui", "버튼", "화면", "디자인", "style", "css", "html"]):
+        return "UI 작업"
+
+    if any(keyword in lowered for keyword in ["코드", "구현", "리팩토링", "provider", "prompt", "parser", "agent"]):
+        return "개발 작업"
+
+    if any(keyword in lowered for keyword in ["테스트", "실행", "확인", "에러", "오류", "버그"]):
+        return "검증 작업"
+
+    if any(keyword in lowered for keyword in ["정리", "메모", "문서", "보고서", "발표"]):
+        return "정리 작업"
+
+    if any(keyword in lowered for keyword in ["공부", "시험", "과제", "복습"]):
+        return "학습 작업"
+
+    return "일반 작업"
+
+
+def _score_importance(task: str) -> int:
+    """
+    중요도 점수.
+    높을수록 먼저 해야 하는 작업이다.
+    """
+    lowered = task.lower()
+    score = 0
+
+    high_keywords = [
+        "마감",
+        "제출",
+        "필수",
+        "반드시",
+        "꼭",
+        "오늘",
+        "에러",
+        "오류",
+        "버그",
+        "테스트",
+        "실행",
+        "github",
+        "push",
+        "commit",
+        "업로드",
+    ]
+
+    medium_keywords = [
+        "고도화",
+        "구현",
+        "수정",
+        "리팩토링",
+        "agent",
+        "provider",
+        "prompt",
+        "ui",
+        "버튼",
+        "확인",
+    ]
+
+    low_keywords = [
+        "나중",
+        "추후",
+        "언젠가",
+        "디자인",
+        "꾸미기",
+        "선택",
+        "여유",
+    ]
+
+    for keyword in high_keywords:
+        if keyword in lowered:
+            score += 3
+
+    for keyword in medium_keywords:
+        if keyword in lowered:
+            score += 2
+
+    for keyword in low_keywords:
+        if keyword in lowered:
+            score -= 3
+
+    return score
+
+
+def _score_urgency(task: str) -> int:
+    """
+    긴급도 점수.
+    """
+    lowered = task.lower()
+    score = 0
+
+    urgent_keywords = [
+        "오늘",
+        "지금",
+        "바로",
+        "마감",
+        "제출",
+        "에러",
+        "오류",
+        "안됨",
+        "실패",
+        "push",
+        "commit",
+        "업로드",
+    ]
+
+    not_urgent_keywords = [
+        "나중",
+        "추후",
+        "언젠가",
+        "시간 남으면",
+        "여유",
+        "디자인",
+        "꾸미기",
+    ]
+
+    for keyword in urgent_keywords:
+        if keyword in lowered:
+            score += 3
+
+    for keyword in not_urgent_keywords:
+        if keyword in lowered:
+            score -= 3
+
+    return score
+
+
+def _label_score(score: int) -> str:
+    """
+    점수를 보기 쉬운 라벨로 변환한다.
+    """
+    if score >= 5:
+        return "높음"
+
+    if score >= 2:
+        return "보통"
+
+    return "낮음"
+
+
+def _classify_task(task: str, importance_score: int, urgency_score: int) -> str:
     """
     작업을 must / optional / later 중 하나로 분류한다.
     """
     lowered = task.lower()
-
-    must_keywords = [
-        "마감",
-        "제출",
-        "오늘",
-        "반드시",
-        "꼭",
-        "필수",
-        "에러",
-        "오류",
-        "버그",
-        "push",
-        "commit",
-        "github",
-        "테스트",
-        "실행",
-        "업로드",
-    ]
 
     later_keywords = [
         "나중",
         "추후",
         "언젠가",
         "아이디어",
-        "디자인",
+        "디자인 더",
         "꾸미기",
         "선택",
         "여유",
         "시간 남으면",
     ]
 
-    optional_keywords = [
-        "정리",
-        "메모",
-        "개선",
-        "보완",
-        "자료",
-        "복습",
-        "확인",
-    ]
-
-    if any(keyword in lowered for keyword in must_keywords):
-        return "must"
-
     if any(keyword in lowered for keyword in later_keywords):
         return "later"
 
-    if any(keyword in lowered for keyword in optional_keywords):
-        return "optional"
+    if importance_score >= 4 or urgency_score >= 3:
+        return "must"
+
+    if importance_score <= 0 and urgency_score <= 0:
+        return "later"
 
     return "optional"
 
@@ -235,21 +373,58 @@ def _analyze_tasks(tasks: list[str]) -> dict:
     }
 
     for task in tasks:
-        category = _classify_task(task)
+        importance_score = _score_importance(task)
+        urgency_score = _score_urgency(task)
         minutes = _estimate_minutes(task)
+        task_type = _detect_task_type(task)
+        category = _classify_task(task, importance_score, urgency_score)
 
-        result[category].append({
+        item = {
             "title": task,
             "minutes": minutes,
-        })
+            "type": task_type,
+            "importance_score": importance_score,
+            "urgency_score": urgency_score,
+            "importance": _label_score(importance_score),
+            "urgency": _label_score(urgency_score),
+            "priority_score": importance_score + urgency_score,
+        }
 
-    # 반드시 해야 할 일이 하나도 없으면 첫 번째 작업을 must로 올린다.
+        result[category].append(item)
+
+    for key in result:
+        result[key].sort(
+            key=lambda item: (
+                item["priority_score"],
+                -item["minutes"],
+            ),
+            reverse=True,
+        )
+
+    # 반드시 해야 할 일이 하나도 없으면 optional의 첫 작업을 must로 올린다.
     if not result["must"] and result["optional"]:
         first_task = result["optional"].pop(0)
         result["must"].append(first_task)
 
+    # 그래도 아무 작업이 없으면 기본 작업 생성
+    if not result["must"] and not result["optional"] and not result["later"]:
+        result["must"].append({
+            "title": "오늘 해야 할 일을 3개 이상 적기",
+            "minutes": 15,
+            "type": "정리 작업",
+            "importance_score": 3,
+            "urgency_score": 2,
+            "importance": "보통",
+            "urgency": "보통",
+            "priority_score": 5,
+        })
+
     return result
 
+
+# ============================================================
+# Task 출력 포맷
+# ============================================================
 
 def _format_task_items(items: list[dict]) -> str:
     """
@@ -261,7 +436,12 @@ def _format_task_items(items: list[dict]) -> str:
     lines = []
 
     for index, item in enumerate(items, start=1):
-        lines.append(f"{index}. {item['title']} — 예상 {item['minutes']}분")
+        lines.append(
+            f"{index}. {item['title']}\n"
+            f"   - 유형: {item['type']}\n"
+            f"   - 중요도: {item['importance']} / 긴급도: {item['urgency']}\n"
+            f"   - 예상 시간: {item['minutes']}분"
+        )
 
     return "\n".join(lines)
 
@@ -297,9 +477,19 @@ def _make_30min_plan(analysis: dict) -> str:
             else:
                 action = f"{task['title']} 이어서 진행"
 
+            if current_start == 0:
+                note = "가장 먼저 시작할 작업"
+            elif task in analysis["must"]:
+                note = "우선 처리 작업"
+            elif task in analysis["optional"]:
+                note = "시간이 남으면 진행"
+            else:
+                note = "여유가 있을 때만 진행"
+
             blocks.append(
                 f"### {current_start}분 ~ {current_end}분\n"
-                f"- {action}"
+                f"- {action}\n"
+                f"- 구분: {note}"
             )
 
             current_start = current_end
@@ -320,13 +510,58 @@ def _get_next_action(analysis: dict) -> str:
     """
     if analysis["must"]:
         first = analysis["must"][0]["title"]
-        return f"지금 바로 **{first}** 작업을 열고, 30분 동안 진행할 수 있는 첫 단계부터 시작하세요."
+        return f"지금 바로 **{first}** 작업을 열고, 첫 30분 동안 진행할 수 있는 단계부터 시작하세요."
 
     if analysis["optional"]:
         first = analysis["optional"][0]["title"]
         return f"지금 바로 **{first}** 작업부터 가볍게 시작하세요."
 
     return "지금 바로 오늘 해야 할 일을 3개만 적으세요."
+
+
+def _make_summary(analysis: dict) -> str:
+    total_tasks = sum(len(group) for group in analysis.values())
+    total_minutes = sum(
+        item["minutes"]
+        for group in analysis.values()
+        for item in group
+    )
+
+    must_minutes = sum(item["minutes"] for item in analysis["must"])
+    optional_minutes = sum(item["minutes"] for item in analysis["optional"])
+    later_minutes = sum(item["minutes"] for item in analysis["later"])
+
+    return f"""
+- 감지된 작업 수: {total_tasks}개
+- 예상 총 작업 시간: 약 {total_minutes}분
+- 반드시 해야 할 일: {len(analysis["must"])}개 / 약 {must_minutes}분
+- 시간이 남으면 할 일: {len(analysis["optional"])}개 / 약 {optional_minutes}분
+- 미뤄도 되는 일: {len(analysis["later"])}개 / 약 {later_minutes}분
+""".strip()
+
+
+def _make_focus_message(analysis: dict) -> str:
+    """
+    작업량을 보고 사용자에게 오늘의 운영 전략을 알려준다.
+    """
+    total_minutes = sum(
+        item["minutes"]
+        for group in analysis.values()
+        for item in group
+    )
+
+    must_minutes = sum(item["minutes"] for item in analysis["must"])
+
+    if must_minutes >= 180:
+        return "오늘은 반드시 해야 할 일만 처리해도 작업량이 많습니다. 선택 작업은 과감히 미루는 것이 좋습니다."
+
+    if total_minutes >= 240:
+        return "전체 작업량이 많은 편입니다. 반드시 해야 할 일부터 끝내고, 나머지는 다음 작업으로 넘기는 방식이 안전합니다."
+
+    if total_minutes <= 90:
+        return "오늘 작업량은 비교적 가벼운 편입니다. 핵심 작업을 끝낸 뒤 정리와 GitHub 업로드까지 마무리하기 좋습니다."
+
+    return "오늘은 핵심 작업을 먼저 끝내고, 남은 시간에 정리 작업을 붙이는 방식이 좋습니다."
 
 
 # ============================================================
@@ -343,12 +578,8 @@ def _mock_task_response(prompt: str) -> str:
     later_text = _format_task_items(analysis["later"])
     plan_text = _make_30min_plan(analysis)
     next_action = _get_next_action(analysis)
-
-    total_minutes = sum(
-        item["minutes"]
-        for group in analysis.values()
-        for item in group
-    )
+    summary_text = _make_summary(analysis)
+    focus_message = _make_focus_message(analysis)
 
     if analysis["must"]:
         core_goal = analysis["must"][0]["title"]
@@ -358,7 +589,7 @@ def _mock_task_response(prompt: str) -> str:
         core_goal = "오늘 해야 할 일을 명확히 정리하기"
 
     return f"""
-# CRENOBA Task Agent v0.7.2
+# CRENOBA Task Agent v0.7.4
 
 입력 내용:
 {user_input}
@@ -367,7 +598,10 @@ def _mock_task_response(prompt: str) -> str:
 
 ## 1. 오늘의 핵심 목표
 
-오늘의 핵심 목표는 **{core_goal}** 작업을 중심으로 실제로 끝낼 수 있는 실행 계획을 만드는 것입니다.
+오늘의 핵심 목표는 **{core_goal}** 작업을 먼저 끝내는 것입니다.
+
+운영 전략:
+{focus_message}
 
 ---
 
@@ -411,9 +645,7 @@ def _mock_task_response(prompt: str) -> str:
 
 ## 작업량 요약
 
-- 감지된 작업 수: {len(tasks)}개
-- 예상 총 작업 시간: 약 {total_minutes}분
-- 우선 처리 작업 수: {len(analysis["must"])}개
+{summary_text}
 """.strip()
 
 
