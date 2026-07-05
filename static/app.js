@@ -17,7 +17,7 @@ const modelValue = document.getElementById("modelValue");
 const timeValue = document.getElementById("timeValue");
 const versionValue = document.getElementById("versionValue");
 
-const HISTORY_KEY = "crenoba_command_history_v0941";
+const HISTORY_KEY = "crenoba_command_history_v0952";
 
 function setStatus(type, text) {
     statusDot.className = `status-dot ${type}`;
@@ -30,7 +30,7 @@ function updateMetadata(data) {
     providerValue.textContent = data.provider || "unknown";
     modelValue.textContent = data.model || "unknown";
     timeValue.textContent = data.response_time_sec ? `${data.response_time_sec}s` : "-";
-    versionValue.textContent = data.version || "v0.9.4.1";
+    versionValue.textContent = data.version || "v0.9.5.2";
 }
 
 async function runAgent() {
@@ -97,7 +97,7 @@ function clearInput() {
     providerValue.textContent = "waiting";
     modelValue.textContent = "waiting";
     timeValue.textContent = "-";
-    versionValue.textContent = "v0.9.4.1";
+    versionValue.textContent = "v0.9.5.2";
 
     setStatus("idle", "Ready");
 }
@@ -155,7 +155,7 @@ function saveHistory(prompt, data) {
         provider: data.provider || "unknown",
         model: data.model || "unknown",
         responseTimeSec: data.response_time_sec || null,
-        version: data.version || "v0.9.4.1",
+        version: data.version || "v0.9.5.2",
         createdAt: new Date().toLocaleString("ko-KR"),
     };
 

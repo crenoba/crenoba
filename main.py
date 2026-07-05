@@ -12,7 +12,7 @@ load_dotenv()
 from core.ai_client import AIClient
 
 
-APP_VERSION = "v0.9.4.1"
+APP_VERSION = "v0.9.5.2"
 
 app = FastAPI(
     title="CRENOBA",
@@ -64,7 +64,7 @@ def relay(req: RelayRequest):
     result = client.generate(req.prompt)
 
     end_time = time.perf_counter()
-    elapsed_sec = round(end_time - start_time, 2)
+    response_time_sec = round(end_time - start_time, 2)
 
     return {
         "output": result.get("output", ""),
@@ -72,6 +72,6 @@ def relay(req: RelayRequest):
         "agent": result.get("agent", "general"),
         "provider": result.get("provider", "unknown"),
         "model": result.get("model", "unknown"),
-        "response_time_sec": elapsed_sec,
+        "response_time_sec": response_time_sec,
         "version": APP_VERSION,
     }
