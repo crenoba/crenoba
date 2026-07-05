@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <title>CRENOBA Core Agent</title>
+
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="background-glow glow-one"></div>
+  <div class="background-glow glow-two"></div>
+
+  <div class="app">
+    <header class="hero">
+      <nav class="topbar">
+        <div class="brand">
+          <div class="brand-mark">C</div>
+          <div>
+            <p class="brand-name">CRENOBA</p>
+            <p class="brand-sub">Core Agent System</p>
+          </div>
+        </div>
+
+        <div class="top-actions">
+          <span class="status-pill">v0.5 Mock Mode</span>
+          <span class="status-pill muted">Local FastAPI</span>
+        </div>
+      </nav>
+
+      <section class="hero-content">
+        <p class="eyebrow">Stop looking over your shoulder.</p>
+        <h1>Turn ideas into executable systems.</h1>
+        <p class="subtitle">
+            /crenoba 명령어로 목적별 업무 보조 Agent를 실행합니다. 할 일, 공부, 코드, 보고서, 프로젝트, Apollo 작업을 정리할 수 있습니다.
+        </p>
+      </section>
+
+      <section class="status-grid">
+        <div class="status-card">
+          <span>Provider</span>
+          <strong id="providerCard">mock</strong>
+        </div>
+        <div class="status-card">
+          <span>Mode</span>
+          <strong id="modeCard">Ready</strong>
+        </div>
+        <div class="status-card">
+          <span>Agent</span>
+          <strong id="agentCard">-</strong>
+        </div>
+        <div class="status-card">
+          <span>Version</span>
+          <strong>v0.5</strong>
+        </div>
+      </section>
+    </header>
+
+    <main class="workspace">
+      <section class="panel command-panel">
+        <div class="panel-header">
+          <div>
+            <p class="section-label">Input</p>
+            <h2>Command Console</h2>
+          </div>
+          <button class="ghost-button" id="clearButton">Clear</button>
+        </div>
+
+    <div class="quick-command-grid">
+    <button id="taskButton">
+        <span>/crenoba task</span>
+        <small>할 일과 우선순위 정리</small>
+    </button>
+    <button id="studyButton">
+        <span>/crenoba study</span>
+        <small>공부/과제 보조</small>
+    </button>
+    <button id="codeButton">
+        <span>/crenoba code</span>
+        <small>코딩/디버깅 보조</small>
+    </button>
+    <button id="reportButton">
+        <span>/crenoba report</span>
+        <small>보고서/문서 작성</small>
+    </button>
+    <button id="projectButton">
+        <span>/crenoba project</span>
+        <small>프로젝트 관리</small>
+    </button>
+    <button id="apolloButton">
+        <span>/crenoba apollo</span>
+        <small>자율주행 Apollo 보조</small>
+    </button>
+    <button id="relayButton">
+        <span>/crenoba relay</span>
+        <small>상태 저장 문서</small>
+    </button>
+    </div>
+
+        <textarea id="messageInput" spellcheck="false">/crenoba task
+오늘 해야 할 일:
+- CRENOBA Agent 명령어 리팩토링
+- 웹 UI 버튼 수정
+- mock provider 테스트
+- 다음 단계 정리</textarea>
+
+        <div class="run-row">
+          <p class="hint">Enter로 줄바꿈, Run Agent로 실행</p>
+          <button class="primary-button" id="runButton">Run Agent</button>
+        </div>
+
+        <section class="history-box">
+          <div class="history-header">
+            <div>
+              <p class="section-label">Memory</p>
+              <h3>Command History</h3>
+            </div>
+            <button class="ghost-button small" id="clearHistoryButton">Clear History</button>
+          </div>
+
+          <div id="historyList" class="history-list">
+            <p class="empty-history">아직 실행 기록이 없습니다.</p>
+          </div>
+        </section>
+      </section>
+
+      <section class="panel output-panel">
+        <div class="panel-header">
+          <div>
+            <p class="section-label">Output</p>
+            <h2>Agent Response</h2>
+          </div>
+          <span id="statusBadge" class="run-status">Ready</span>
+        </div>
+
+        <div class="meta-grid">
+          <div>
+            <span>Command</span>
+            <strong id="commandText">-</strong>
+          </div>
+          <div>
+            <span>Agent</span>
+            <strong id="agentText">-</strong>
+          </div>
+          <div>
+            <span>Provider</span>
+            <strong id="providerText">-</strong>
+          </div>
+          <div>
+            <span>Model</span>
+            <strong id="modelText">-</strong>
+          </div>
+        </div>
+
+        <div class="output-toolbar">
+          <button class="ghost-button" id="copyButton">Copy Output</button>
+        </div>
+
+        <pre id="outputBox">결과가 여기에 표시됩니다.</pre>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
