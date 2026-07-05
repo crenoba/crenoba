@@ -1,271 +1,216 @@
-const messageInput = document.getElementById("messageInput");
+const promptInput = document.getElementById("promptInput");
 const outputBox = document.getElementById("outputBox");
 
-const statusBadge = document.getElementById("statusBadge");
-const commandText = document.getElementById("commandText");
-const agentText = document.getElementById("agentText");
-const providerText = document.getElementById("providerText");
-const modelText = document.getElementById("modelText");
+const runBtn = document.getElementById("runBtn");
+const clearInputBtn = document.getElementById("clearInputBtn");
+const copyOutputBtn = document.getElementById("copyOutputBtn");
+const clearHistoryBtn = document.getElementById("clearHistoryBtn");
+
+const providerStatus = document.getElementById("providerStatus");
+const modeStatus = document.getElementById("modeStatus");
+const agentStatus = document.getElementById("agentStatus");
+const readyStatus = document.getElementById("readyStatus");
+const commandStatus = document.getElementById("commandStatus");
+const responseAgentStatus = document.getElementById("responseAgentStatus");
+const responseProviderStatus = document.getElementById("responseProviderStatus");
 const historyList = document.getElementById("historyList");
 
-const providerCard = document.getElementById("providerCard");
-const modeCard = document.getElementById("modeCard");
-const agentCard = document.getElementById("agentCard");
+const HISTORY_KEY = "crenoba_command_history_v07";
 
-const taskButton = document.getElementById("taskButton");
-const studyButton = document.getElementById("studyButton");
-const codeButton = document.getElementById("codeButton");
-const reportButton = document.getElementById("reportButton");
-const projectButton = document.getElementById("projectButton");
-const apolloButton = document.getElementById("apolloButton");
-const relayButton = document.getElementById("relayButton");
-
-const runButton = document.getElementById("runButton");
-const clearButton = document.getElementById("clearButton");
-const clearHistoryButton = document.getElementById("clearHistoryButton");
-const copyButton = document.getElementById("copyButton");
-
-const HISTORY_KEY = "crenoba_command_history";
-
-const examples = {
-  task: `/crenoba task
+const commandExamples = {
+  "/crenoba task": `/crenoba task
 오늘 해야 할 일:
-- CRENOBA Agent 명령어 리팩토링
-- 웹 UI 버튼 수정
+- CRENOBA v0.7 Task Agent 고도화
+- 웹 UI v0.7 적용
 - mock provider 테스트
-- 다음 단계 정리`,
+- GitHub에 작업 내용 올리기`,
 
-  study: `/crenoba study
-열역학 포화액과 포화증기 개념을 과제에 쓸 수 있게 정리해줘.`,
+  "/crenoba study": `/crenoba study
+공부할 내용:
+- 핵심 개념 정리
+- 예제 풀이
+- 헷갈리는 부분 질문 만들기`,
 
-  code: `/crenoba code
-FastAPI와 JavaScript 웹 UI가 연결되는 구조를 설명하고, 버튼이 안 눌릴 때 확인할 점을 정리해줘.`,
+  "/crenoba code": `/crenoba code
+코드 문제:
+- 에러 메시지 붙여넣기
+- 문제가 생긴 파일 설명
+- 원하는 동작 설명`,
 
-  report: `/crenoba report
-CRENOBA 업무 보조 AI Agent 시스템 설계 내용을 보고서 형식으로 정리해줘.`,
+  "/crenoba report": `/crenoba report
+보고서 주제:
+- 목적
+- 들어가야 할 내용
+- 발표 또는 제출 형식`,
 
-  project: `/crenoba project
-CRENOBA를 올해 안에 업무 보조 AI Agent MVP로 만들고 싶어. 현재는 mock provider와 웹 UI까지 만들었어.`,
+  "/crenoba project": `/crenoba project
+프로젝트 상태:
+- 완료한 것
+- 진행 중인 것
+- 막힌 것
+- 다음 목표`,
 
-  apollo: `/crenoba apollo
-OpenCV 차선 인식 파이프라인을 Apollo 프로젝트 기준으로 다시 정리해줘.`,
+  "/crenoba apollo": `/crenoba apollo
+Apollo 작업:
+- OpenCV 차선 인식
+- Arduino 모터 제어
+- INPOS / Encoder / 브레이크 테스트`,
 
-  relay: `/crenoba relay
-현재 CRENOBA Core Agent v0.6을 만들고 있다. 목표는 브랜드형 챗봇이 아니라 업무 보조용 목적별 AI Agent 시스템이다.`
+  "/crenoba relay": `/crenoba relay
+현재 작업 상태를 다음 채팅에서도 이어갈 수 있게 정리해줘.`
 };
 
-function setExample(type) {
-  messageInput.value = examples[type] || examples.task;
-  modeCard.textContent = type;
+function detectCommand(text) {
+  const firstLine = text.trim().split("\n")[0].trim();
+
+  if (firstLine.startsWith("/crenoba task")) return "task";
+  if (firstLine.startsWith("/crenoba study")) return "study";
+  if (firstLine.startsWith("/crenoba code")) return "code";
+  if (firstLine.startsWith("/crenoba report")) return "report";
+  if (firstLine.startsWith("/crenoba project")) return "project";
+  if (firstLine.startsWith("/crenoba apollo")) return "apollo";
+  if (firstLine.startsWith("/crenoba relay")) return "relay";
+
+  return "general";
 }
 
-async function sendMessage() {
-  const message = messageInput.value.trim();
+function updateStatus(mode, provider = "mock") {
+  const agentName = mode === "general" ? "-" : `${mode} agent`;
 
-  if (!message) {
-    outputBox.textContent = "메시지를 입력하세요.";
-    setStatus("Empty");
-    return;
-  }
+  providerStatus.textContent = provider;
+  modeStatus.textContent = mode;
+  agentStatus.textContent = agentName;
 
-  setStatus("Running...");
-  outputBox.textContent = "Agent가 응답을 생성하는 중입니다...";
+  commandStatus.textContent = mode;
+  responseAgentStatus.textContent = agentName;
+  responseProviderStatus.textContent = provider;
+}
 
-  resetMeta();
-
+function getHistory() {
   try {
-    const response = await fetch("/agent", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ message: message })
-    });
-
-    const data = await response.json();
-
-    commandText.textContent = data.command || "-";
-    agentText.textContent = data.agent || "-";
-    providerText.textContent = data.provider || "-";
-    modelText.textContent = data.model || "-";
-
-    providerCard.textContent = data.provider || "-";
-    modeCard.textContent = data.command || "-";
-    agentCard.textContent = data.agent || "-";
-
-    if (data.error) {
-      setStatus("Error");
-      outputBox.textContent =
-        typeof data.error === "string"
-          ? data.error
-          : JSON.stringify(data.error, null, 2);
-      return;
-    }
-
-    setStatus("Done");
-    outputBox.textContent = data.output || "응답이 비어 있습니다.";
-
-    saveHistory({
-      message: message,
-      command: data.command || "-",
-      agent: data.agent || "-",
-      provider: data.provider || "-",
-      model: data.model || "-",
-      output: data.output || ""
-    });
-
-  } catch (error) {
-    setStatus("Error");
-    outputBox.textContent = `요청 중 오류가 발생했습니다.\n\n${error}`;
+    return JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
+  } catch {
+    return [];
   }
 }
 
-async function copyOutput() {
-  const text = outputBox.textContent;
-
-  if (!text || text === "결과가 여기에 표시됩니다.") {
-    setStatus("Nothing to copy");
-    return;
-  }
-
-  try {
-    await navigator.clipboard.writeText(text);
-    setStatus("Copied");
-  } catch (error) {
-    setStatus("Copy failed");
-    outputBox.textContent += `\n\n[Copy Error]\n${error}`;
-  }
-}
-
-function clearAll() {
-  messageInput.value = "";
-  outputBox.textContent = "결과가 여기에 표시됩니다.";
-
-  setStatus("Ready");
-  resetMeta();
-
-  providerCard.textContent = "mock";
-  modeCard.textContent = "Ready";
-  agentCard.textContent = "-";
-}
-
-function saveHistory(item) {
+function saveHistory(prompt) {
   const history = getHistory();
+  const trimmed = prompt.trim();
+
+  if (!trimmed) return;
 
   const nextHistory = [
-    {
-      ...item,
-      createdAt: new Date().toLocaleString()
-    },
-    ...history
-  ].slice(0, 10);
+    trimmed,
+    ...history.filter((item) => item !== trimmed)
+  ].slice(0, 8);
 
   localStorage.setItem(HISTORY_KEY, JSON.stringify(nextHistory));
   renderHistory();
 }
 
-function getHistory() {
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch (error) {
-    return [];
-  }
-}
-
 function renderHistory() {
   const history = getHistory();
+  historyList.innerHTML = "";
 
-  if (!history.length) {
-    historyList.innerHTML = `<p class="empty-history">아직 실행 기록이 없습니다.</p>`;
+  if (history.length === 0) {
+    historyList.innerHTML = `<p class="empty">아직 실행 기록이 없습니다.</p>`;
     return;
   }
 
-  historyList.innerHTML = history.map((item, index) => {
-    const preview = item.message
-      .replace(/\n/g, " ")
-      .slice(0, 90);
-
-    return `
-      <div class="history-item" data-index="${index}">
-        <p class="history-command">/crenoba ${escapeHtml(item.command)} · ${escapeHtml(item.agent)}</p>
-        <p class="history-preview">${escapeHtml(preview)}</p>
-      </div>
-    `;
-  }).join("");
-
-  const items = document.querySelectorAll(".history-item");
-
-  items.forEach((item) => {
-    item.addEventListener("click", () => {
-      const index = Number(item.dataset.index);
-      loadHistory(index);
+  history.forEach((item) => {
+    const div = document.createElement("div");
+    div.className = "history-item";
+    div.textContent = item.length > 120 ? `${item.slice(0, 120)}...` : item;
+    div.addEventListener("click", () => {
+      promptInput.value = item;
+      updateStatus(detectCommand(item));
     });
+    historyList.appendChild(div);
   });
 }
 
-function loadHistory(index) {
-  const history = getHistory();
-  const item = history[index];
+async function runAgent() {
+  const prompt = promptInput.value.trim();
 
-  if (!item) return;
+  if (!prompt) {
+    outputBox.textContent = "입력 내용이 없습니다.";
+    return;
+  }
 
-  messageInput.value = item.message;
-  outputBox.textContent = item.output || "저장된 응답이 없습니다.";
+  const mode = detectCommand(prompt);
+  updateStatus(mode);
 
-  commandText.textContent = item.command || "-";
-  agentText.textContent = item.agent || "-";
-  providerText.textContent = item.provider || "-";
-  modelText.textContent = item.model || "history";
+  readyStatus.textContent = "실행 중...";
+  outputBox.textContent = "CRENOBA Agent 실행 중...";
 
-  providerCard.textContent = item.provider || "-";
-  modeCard.textContent = item.command || "-";
-  agentCard.textContent = item.agent || "-";
+  try {
+    const response = await fetch("/relay", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ prompt })
+    });
 
-  setStatus("Loaded");
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    const provider = data.provider || "mock";
+    const resultMode = data.mode || mode;
+    const output = data.output || JSON.stringify(data, null, 2);
+
+    updateStatus(resultMode, provider);
+
+    readyStatus.textContent = "완료";
+    outputBox.textContent = output;
+
+    saveHistory(prompt);
+  } catch (error) {
+    readyStatus.textContent = "오류";
+    outputBox.textContent = `에러가 발생했습니다.\n\n${error.message}`;
+  }
 }
 
-function clearHistory() {
+runBtn.addEventListener("click", runAgent);
+
+clearInputBtn.addEventListener("click", () => {
+  promptInput.value = "";
+  promptInput.focus();
+});
+
+copyOutputBtn.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(outputBox.textContent);
+    copyOutputBtn.textContent = "Copied";
+    setTimeout(() => {
+      copyOutputBtn.textContent = "Copy Output";
+    }, 900);
+  } catch {
+    outputBox.textContent += "\n\n복사에 실패했습니다.";
+  }
+});
+
+clearHistoryBtn.addEventListener("click", () => {
   localStorage.removeItem(HISTORY_KEY);
   renderHistory();
-  setStatus("History cleared");
-}
+});
 
-function resetMeta() {
-  commandText.textContent = "-";
-  agentText.textContent = "-";
-  providerText.textContent = "-";
-  modelText.textContent = "-";
-}
+document.querySelectorAll("[data-command]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const command = button.dataset.command;
+    promptInput.value = commandExamples[command] || command;
+    updateStatus(detectCommand(promptInput.value));
+    promptInput.focus();
+  });
+});
 
-function setStatus(text) {
-  statusBadge.textContent = text;
-  modeCard.textContent = text;
-}
+promptInput.addEventListener("input", () => {
+  updateStatus(detectCommand(promptInput.value));
+});
 
-function escapeHtml(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
-
-function bindEvents() {
-  taskButton.addEventListener("click", () => setExample("task"));
-  studyButton.addEventListener("click", () => setExample("study"));
-  codeButton.addEventListener("click", () => setExample("code"));
-  reportButton.addEventListener("click", () => setExample("report"));
-  projectButton.addEventListener("click", () => setExample("project"));
-  apolloButton.addEventListener("click", () => setExample("apollo"));
-  relayButton.addEventListener("click", () => setExample("relay"));
-
-  runButton.addEventListener("click", sendMessage);
-  clearButton.addEventListener("click", clearAll);
-  clearHistoryButton.addEventListener("click", clearHistory);
-  copyButton.addEventListener("click", copyOutput);
-}
-
-bindEvents();
 renderHistory();
+updateStatus(detectCommand(promptInput.value));

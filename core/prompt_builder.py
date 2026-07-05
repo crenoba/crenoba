@@ -1,221 +1,370 @@
-def build_prompt(command: str, content: str) -> tuple[str, str]:
+# core/prompt_builder.py
+
+"""
+CRENOBA Prompt Builder
+
+v0.7.3 수정:
+- command_parser에서 mode가 잘못 넘어오거나 general로 넘어와도
+  user_text 안의 /crenoba task 명령어를 다시 확인한다.
+- /crenoba task 입력이 반드시 CRENOBA TASK AGENT prompt로 변환되도록 한다.
+"""
+
+
+VALID_AGENT_MODES = {
+    "task",
+    "study",
+    "code",
+    "report",
+    "project",
+    "apollo",
+    "relay",
+}
+
+
+def clean_command_text(text: str) -> str:
     """
-    /crenoba 명령어에 맞는 업무 보조 Agent 이름과 프롬프트를 생성한다.
+    사용자가 입력한 명령어에서 /crenoba task 같은 prefix를 제거한다.
     """
+    if not text:
+        return ""
 
-    prompts = {
-        "task": {
-            "agent": "CRENOBA Task Agent",
-            "system": """
-너는 CRENOBA Task Agent다.
+    lines = text.strip().splitlines()
 
-역할:
-사용자의 할 일, 일정, 해야 할 작업을 정리하고 우선순위를 정한다.
+    if not lines:
+        return ""
 
-답변 규칙:
-- 한국어로 답변한다.
-- 사용자가 바로 행동할 수 있게 정리한다.
-- 너무 많은 일을 한 번에 시키지 않는다.
-- 중요도와 실행 가능성을 기준으로 나눈다.
+    first_line = lines[0].strip().lower()
 
-반드시 다음 구조로 답변하라:
-1. 오늘의 핵심 목표
-2. 우선순위 정리
-3. 1시간 안에 할 일
-4. 나중에 해도 되는 일
-5. 바로 다음 행동
-""",
-        },
+    command_prefixes = [
+        "/crenoba task",
+        "/crenoba study",
+        "/crenoba code",
+        "/crenoba report",
+        "/crenoba project",
+        "/crenoba apollo",
+        "/crenoba relay",
+        "/gpt finish",
+        "/gpt relay",
+        "/gpt restore",
+    ]
 
-        "study": {
-            "agent": "CRENOBA Study Agent",
-            "system": """
-너는 CRENOBA Study Agent다.
+    for prefix in command_prefixes:
+        if first_line.startswith(prefix):
+            first_original = lines[0].strip()
 
-역할:
-사용자의 공부, 과제, 전공 개념 이해를 돕는다.
+            # 첫 줄이 "/crenoba task 추가내용" 형태면 추가내용은 살린다.
+            remaining_first_line = first_original[len(prefix):].strip()
 
-답변 규칙:
-- 한국어로 답변한다.
-- 어려운 개념은 쉽게 풀어 설명한다.
-- 공식이 있으면 의미와 사용 시점을 함께 설명한다.
-- 시험/과제에 바로 쓸 수 있게 정리한다.
+            rest_lines = lines[1:]
 
-반드시 다음 구조로 답변하라:
-1. 개념 한 줄 요약
-2. 핵심 개념 설명
-3. 중요한 공식 또는 원리
-4. 자주 헷갈리는 부분
-5. 예시 또는 풀이 흐름
-6. 다음 공부 방향
-""",
-        },
+            if remaining_first_line:
+                return "\n".join([remaining_first_line] + rest_lines).strip()
 
-        "code": {
-            "agent": "CRENOBA Code Agent",
-            "system": """
-너는 CRENOBA Code Agent다.
+            return "\n".join(rest_lines).strip()
 
-역할:
-사용자의 코딩, 디버깅, 리팩토링, 개발 구조 설계를 돕는다.
+    return text.strip()
 
-답변 규칙:
-- 가장 가능성 높은 원인부터 말한다.
-- 필요하면 수정 코드를 제시한다.
-- 사용자가 바로 따라 할 수 있는 명령어를 제시한다.
-- 코드 설명은 실용적으로 한다.
 
-반드시 다음 구조로 답변하라:
-1. 문제 또는 목표 요약
-2. 원인/구현 방향 분석
-3. 수정 또는 구현 방법
-4. 필요한 코드
-5. 테스트 방법
-6. 다음 개발 단계
-""",
-        },
+def detect_agent_mode(text: str) -> str:
+    """
+    사용자 입력을 보고 어떤 Agent인지 판단한다.
+    여러 줄 입력이어도 첫 줄의 명령어를 기준으로 판단한다.
+    """
+    if not text:
+        return "general"
 
-        "report": {
-            "agent": "CRENOBA Report Agent",
-            "system": """
-너는 CRENOBA Report Agent다.
+    first_line = text.strip().splitlines()[0].strip().lower()
 
-역할:
-사용자의 보고서, 발표 자료, 문서 초안 작성을 돕는다.
+    if first_line.startswith("/crenoba task"):
+        return "task"
+    if first_line.startswith("/crenoba study"):
+        return "study"
+    if first_line.startswith("/crenoba code"):
+        return "code"
+    if first_line.startswith("/crenoba report"):
+        return "report"
+    if first_line.startswith("/crenoba project"):
+        return "project"
+    if first_line.startswith("/crenoba apollo"):
+        return "apollo"
+    if first_line.startswith("/crenoba relay"):
+        return "relay"
 
-답변 규칙:
-- 학교/프로젝트 제출용으로 쓸 수 있게 정리한다.
-- 목차와 본문 흐름을 명확히 만든다.
-- 너무 과장된 표현은 피한다.
-- 필요하면 표나 그림 제안도 포함한다.
+    return "general"
 
-반드시 다음 구조로 답변하라:
-1. 문서 목적
-2. 추천 제목
-3. 목차
-4. 본문 초안
-5. 표/그림 제안
-6. 결론 또는 마무리 문장
-""",
-        },
 
-        "project": {
-            "agent": "CRENOBA Project Agent",
-            "system": """
-너는 CRENOBA Project Agent다.
+def normalize_mode(mode: str | None, user_text: str) -> str:
+    """
+    main.py에서 넘어온 mode 값을 안전하게 정리한다.
+    mode가 general이거나 이상하면 user_text를 다시 검사한다.
+    """
+    if not mode:
+        return detect_agent_mode(user_text)
 
-역할:
-사용자의 프로젝트를 목표, 일정, 기능, 개발 순서로 관리한다.
+    normalized = mode.lower().strip()
 
-답변 규칙:
-- 현재 단계와 다음 단계를 분리한다.
-- MVP 중심으로 생각한다.
-- 할 일을 너무 크게 잡지 않는다.
-- 완료 기준을 명확히 제시한다.
+    replacements = {
+        "crenoba task": "task",
+        "/crenoba task": "task",
+        "crenoba_task": "task",
+        "task_agent": "task",
 
-반드시 다음 구조로 답변하라:
-1. 프로젝트 목표 요약
-2. 현재 단계
-3. 이번 주 목표
-4. 다음 개발 순서
-5. 막힌 문제 또는 리스크
-6. 완료 기준
-""",
-        },
+        "crenoba study": "study",
+        "/crenoba study": "study",
+        "crenoba_study": "study",
+        "study_agent": "study",
 
-        "apollo": {
-            "agent": "CRENOBA Apollo Agent",
-            "system": """
-너는 CRENOBA Apollo Agent다.
+        "crenoba code": "code",
+        "/crenoba code": "code",
+        "crenoba_code": "code",
+        "code_agent": "code",
 
-역할:
-사용자의 자율주행 자동차 프로젝트, OpenCV 차선 인식, ROS2, Arduino, 모터 제어 작업을 돕는다.
+        "crenoba report": "report",
+        "/crenoba report": "report",
+        "crenoba_report": "report",
+        "report_agent": "report",
 
-답변 규칙:
-- 사용자의 Apollo 프로젝트 맥락을 반영한다.
-- OpenCV, ROS2, Arduino, 제어 흐름을 실용적으로 설명한다.
-- 코드를 제시할 때는 테스트 방법도 함께 제시한다.
-- 발표/보고서용 정리도 가능하게 답변한다.
+        "crenoba project": "project",
+        "/crenoba project": "project",
+        "crenoba_project": "project",
+        "project_agent": "project",
 
-반드시 다음 구조로 답변하라:
-1. Apollo 작업 목표
-2. 현재 문제 또는 주제
-3. 기술 흐름 정리
-4. 구현/수정 방향
-5. 테스트 방법
-6. 다음 실험 또는 개발 단계
-""",
-        },
+        "crenoba apollo": "apollo",
+        "/crenoba apollo": "apollo",
+        "crenoba_apollo": "apollo",
+        "apollo_agent": "apollo",
 
-        "relay": {
-            "agent": "CRENOBA Relay Agent",
-            "system": """
-너는 CRENOBA Relay Agent다.
-
-역할:
-현재 CRENOBA 작업 상태를 다음 채팅, 다음 실행, 다음 개발 단계로 이어갈 수 있게 문서화한다.
-
-답변 규칙:
-- 다음 채팅에 그대로 붙여넣을 수 있게 작성한다.
-- 결정된 것과 미해결 문제를 분리한다.
-- 현재 코드 구조와 다음 작업을 명확히 정리한다.
-
-반드시 다음 구조로 답변하라:
-# CRENOBA Relay Document
-
-1. 현재 목표
-2. 현재 버전
-3. 완료된 작업
-4. 결정된 명령어 체계
-5. 현재 코드/기술 구조
-6. 미해결 문제
-7. 다음 작업
-8. 다음 채팅 시작 명령어
-""",
-        },
-
-        "chat": {
-            "agent": "CRENOBA General Agent",
-            "system": """
-너는 CRENOBA General Agent다.
-
-역할:
-사용자의 일반 입력을 업무 보조 관점에서 정리하고 답변한다.
-
-답변 규칙:
-- 한국어로 답변한다.
-- 필요한 경우 어떤 /crenoba 명령어를 쓰면 좋을지 추천한다.
-""",
-        },
+        "crenoba relay": "relay",
+        "/crenoba relay": "relay",
+        "crenoba_relay": "relay",
+        "relay_agent": "relay",
     }
 
-    if command not in prompts:
-        agent = "CRENOBA Unknown Command Agent"
-        prompt = f"""
-지원하지 않는 명령어입니다: /crenoba {command}
+    normalized = replacements.get(normalized, normalized)
 
-사용 가능한 명령어:
-- /crenoba task
-- /crenoba study
-- /crenoba code
-- /crenoba report
-- /crenoba project
-- /crenoba apollo
-- /crenoba relay
+    if normalized in VALID_AGENT_MODES:
+        return normalized
 
-사용자 입력:
-{content}
-"""
-        return agent, prompt
+    detected = detect_agent_mode(user_text)
 
-    agent = prompts[command]["agent"]
-    system_prompt = prompts[command]["system"]
+    if detected in VALID_AGENT_MODES:
+        return detected
 
-    final_prompt = f"""
-{system_prompt}
+    return "general"
 
-사용자 입력:
-{content}
-"""
 
-    return agent, final_prompt
+def build_task_prompt(user_text: str) -> str:
+    cleaned_text = clean_command_text(user_text)
+
+    return f"""
+# CRENOBA TASK AGENT v0.7.3
+
+너는 CRENOBA의 Task Agent다.
+사용자의 할 일, 공부, 프로젝트, 개발 작업을 실행 가능한 계획으로 정리한다.
+
+## 사용자의 입력
+{cleaned_text if cleaned_text else "사용자가 구체적인 할 일을 입력하지 않았음"}
+
+## 역할
+사용자가 해야 할 일을 정리하고, 우선순위를 나누고, 바로 실행 가능한 계획으로 바꿔라.
+
+## 출력 규칙
+반드시 아래 형식을 지켜라.
+
+### 1. 오늘의 핵심 목표
+- 오늘 가장 중요하게 끝내야 하는 목표를 1문장으로 정리한다.
+
+### 2. 반드시 해야 할 일
+- 오늘 꼭 해야 하는 일을 우선순위 순서로 정리한다.
+- 각 항목은 구체적인 행동으로 작성한다.
+
+### 3. 시간이 남으면 할 일
+- 오늘 꼭 하지 않아도 되지만 하면 좋은 일을 정리한다.
+
+### 4. 미뤄도 되는 일
+- 지금 당장 하지 않아도 되는 일을 분리한다.
+- 사용자가 부담을 줄일 수 있게 정리한다.
+
+### 5. 30분 단위 실행 계획
+- 30분 단위로 바로 따라 할 수 있는 계획을 만든다.
+- 시간이 부족하면 최소 실행 버전도 포함한다.
+
+### 6. 다음 행동 1개
+- 사용자가 지금 바로 시작할 수 있는 가장 작은 행동 하나를 제시한다.
+
+### 7. 마무리 체크 질문
+- 작업을 끝낼 때 스스로 확인할 질문을 2~3개 제시한다.
+
+## 답변 스타일
+- 한국어로 답한다.
+- 너무 길게 설명하지 않는다.
+- 사용자가 바로 움직일 수 있게 쓴다.
+- 막연한 조언보다 실행 행동을 우선한다.
+- 필요하면 사용자의 입력이 부족하다고 말하되, 질문만 하지 말고 가능한 기본 계획을 먼저 제시한다.
+""".strip()
+
+
+def build_study_prompt(user_text: str) -> str:
+    cleaned_text = clean_command_text(user_text)
+
+    return f"""
+# CRENOBA STUDY AGENT
+
+너는 CRENOBA의 Study Agent다.
+사용자의 공부 내용을 정리하고 학습 계획으로 바꾼다.
+
+## 사용자의 입력
+{cleaned_text if cleaned_text else "사용자가 구체적인 공부 내용을 입력하지 않았음"}
+
+## 출력 형식
+### 1. 공부 목표
+### 2. 핵심 개념
+### 3. 이해해야 할 순서
+### 4. 오늘 공부 계획
+### 5. 확인 문제
+""".strip()
+
+
+def build_code_prompt(user_text: str) -> str:
+    cleaned_text = clean_command_text(user_text)
+
+    return f"""
+# CRENOBA CODE AGENT
+
+너는 CRENOBA의 Code Agent다.
+사용자의 코딩, 디버깅, 리팩토링 작업을 돕는다.
+
+## 사용자의 입력
+{cleaned_text if cleaned_text else "사용자가 구체적인 코드 작업을 입력하지 않았음"}
+
+## 출력 형식
+### 1. 문제 요약
+### 2. 원인 분석
+### 3. 해결 방향
+### 4. 수정 코드
+### 5. 테스트 방법
+""".strip()
+
+
+def build_report_prompt(user_text: str) -> str:
+    cleaned_text = clean_command_text(user_text)
+
+    return f"""
+# CRENOBA REPORT AGENT
+
+너는 CRENOBA의 Report Agent다.
+사용자의 보고서, 발표자료, 문서 작성을 돕는다.
+
+## 사용자의 입력
+{cleaned_text if cleaned_text else "사용자가 구체적인 문서 내용을 입력하지 않았음"}
+
+## 출력 형식
+### 1. 문서 목적
+### 2. 핵심 내용
+### 3. 추천 구성
+### 4. 초안
+### 5. 보완할 점
+""".strip()
+
+
+def build_project_prompt(user_text: str) -> str:
+    cleaned_text = clean_command_text(user_text)
+
+    return f"""
+# CRENOBA PROJECT AGENT
+
+너는 CRENOBA의 Project Agent다.
+사용자의 프로젝트 진행 상황을 정리하고 다음 작업을 설계한다.
+
+## 사용자의 입력
+{cleaned_text if cleaned_text else "사용자가 구체적인 프로젝트 내용을 입력하지 않았음"}
+
+## 출력 형식
+### 1. 현재 프로젝트 상태
+### 2. 완료된 작업
+### 3. 남은 작업
+### 4. 우선순위
+### 5. 다음 단계
+""".strip()
+
+
+def build_apollo_prompt(user_text: str) -> str:
+    cleaned_text = clean_command_text(user_text)
+
+    return f"""
+# CRENOBA APOLLO AGENT
+
+너는 CRENOBA의 Apollo Agent다.
+사용자의 자율주행 자동차 프로젝트, OpenCV 차선 인식, Arduino 모터 제어 작업을 돕는다.
+
+## 사용자의 입력
+{cleaned_text if cleaned_text else "사용자가 구체적인 Apollo 작업을 입력하지 않았음"}
+
+## 출력 형식
+### 1. Apollo 작업 요약
+### 2. 현재 문제
+### 3. 원인 후보
+### 4. 해결 단계
+### 5. 테스트 방법
+""".strip()
+
+
+def build_relay_prompt(user_text: str) -> str:
+    cleaned_text = clean_command_text(user_text)
+
+    return f"""
+# CRENOBA RELAY AGENT
+
+너는 CRENOBA의 Relay Agent다.
+현재 작업 상태를 새 채팅이나 다음 작업으로 이어갈 수 있게 정리한다.
+
+## 사용자의 입력
+{cleaned_text if cleaned_text else "사용자가 구체적인 relay 내용을 입력하지 않았음"}
+
+## 출력 형식
+### 1. 현재 버전
+### 2. 완료된 작업
+### 3. 중요한 결정
+### 4. 현재 문제
+### 5. 다음 작업
+### 6. 새 채팅 인수인계 문서
+""".strip()
+
+
+def build_general_prompt(user_text: str) -> str:
+    cleaned_text = clean_command_text(user_text)
+
+    return f"""
+# CRENOBA GENERAL AGENT
+
+너는 CRENOBA의 기본 업무 보조 Agent다.
+
+## 사용자의 입력
+{cleaned_text if cleaned_text else "사용자가 구체적인 내용을 입력하지 않았음"}
+
+사용자의 요청을 이해하고, 가장 도움이 되는 방식으로 정리해서 답변하라.
+""".strip()
+
+
+def build_prompt(user_text: str, mode: str | None = None) -> str:
+    """
+    main.py에서 호출하는 기본 함수.
+    """
+    selected_mode = normalize_mode(mode, user_text)
+
+    if selected_mode == "task":
+        return build_task_prompt(user_text)
+    if selected_mode == "study":
+        return build_study_prompt(user_text)
+    if selected_mode == "code":
+        return build_code_prompt(user_text)
+    if selected_mode == "report":
+        return build_report_prompt(user_text)
+    if selected_mode == "project":
+        return build_project_prompt(user_text)
+    if selected_mode == "apollo":
+        return build_apollo_prompt(user_text)
+    if selected_mode == "relay":
+        return build_relay_prompt(user_text)
+
+    return build_general_prompt(user_text)
