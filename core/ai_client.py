@@ -5,7 +5,7 @@ CRENOBA AI Client
 
 역할:
 - AI_PROVIDER 값에 따라 provider를 선택한다.
-- mock, gemini, openrouter, openai provider를 같은 방식으로 호출할 수 있게 맞춘다.
+- mock, gemini, openrouter, ollama, openai provider를 같은 방식으로 호출할 수 있게 맞춘다.
 - main.py에서는 get_ai_client(provider).generate(prompt) 형태로 사용한다.
 """
 
@@ -98,6 +98,20 @@ def get_openrouter_client():
         return ProviderFunctionAdapter(generate_response)
 
 
+def get_ollama_client():
+    """
+    Ollama Local Provider 연결.
+    """
+    try:
+        from providers.ollama_provider import OllamaProvider
+
+        return ProviderObjectAdapter(OllamaProvider())
+    except Exception:
+        from providers.ollama_provider import generate_response
+
+        return ProviderFunctionAdapter(generate_response)
+
+
 def get_openai_client():
     """
     OpenAI Provider 연결.
@@ -121,7 +135,7 @@ def get_ai_client(provider_name: str = "mock"):
     main.py에서 호출하는 핵심 함수.
 
     사용 예:
-    ai_client = get_ai_client("openrouter")
+    ai_client = get_ai_client("ollama")
     output = ai_client.generate(prompt)
     """
     provider = (provider_name or "mock").lower().strip()
@@ -134,6 +148,9 @@ def get_ai_client(provider_name: str = "mock"):
 
     if provider == "openrouter":
         return get_openrouter_client()
+
+    if provider == "ollama":
+        return get_ollama_client()
 
     if provider == "openai":
         return get_openai_client()
