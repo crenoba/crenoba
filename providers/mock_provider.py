@@ -3,13 +3,13 @@
 """
 CRENOBA Mock Provider
 
-v0.8 Hotfix
-- MockProvider class 복구
-- generate_response 진입점 복구
-- _mock_code_response 누락 문제 해결
+v0.8.1
 - Task Agent v0.7.4 기능 유지
-- Code Agent v0.8 응답 구조 추가
+- Code Agent v0.8.1 사용성 개선
+- 에러 유형 / 파일 후보 / 줄 번호 / 해결 명령어 / Git 체크리스트 제공
 """
+
+import re
 
 
 # ============================================================
@@ -368,15 +368,6 @@ def _format_task_items(items: list[dict]) -> str:
 def _make_30min_plan(analysis: dict) -> str:
     ordered_tasks = analysis["must"] + analysis["optional"] + analysis["later"]
 
-    if not ordered_tasks:
-        return """
-### 0분 ~ 30분
-- 오늘 해야 할 일을 먼저 3개 이상 적는다.
-
-### 30분 ~ 60분
-- 가장 중요한 작업 1개를 골라 시작한다.
-""".strip()
-
     blocks = []
     current_start = 0
 
@@ -416,6 +407,15 @@ def _make_30min_plan(analysis: dict) -> str:
 
         if len(blocks) >= 6:
             break
+
+    if not blocks:
+        return """
+### 0분 ~ 30분
+- 오늘 해야 할 일을 먼저 3개 이상 적는다.
+
+### 30분 ~ 60분
+- 가장 중요한 작업 1개를 골라 시작한다.
+""".strip()
 
     return "\n\n".join(blocks)
 
@@ -556,7 +556,7 @@ def _mock_task_response(prompt: str) -> str:
 
 
 # ============================================================
-# Code Agent v0.8
+# Code Agent v0.8.1
 # ============================================================
 
 def _detect_error_type(user_input: str) -> str:
@@ -583,8 +583,11 @@ def _detect_error_type(user_input: str) -> str:
     if "unicode" in lowered or "decode" in lowered or "utf-8" in lowered:
         return "인코딩 오류"
 
-    if "404" in lowered or "500" in lowered or "http" in lowered:
-        return "API / 서버 응답 오류"
+    if "500 internal server error" in lowered or "post /relay" in lowered:
+        return "FastAPI endpoint 내부 오류"
+
+    if "404" in lowered:
+        return "API 경로 오류"
 
     if "uvicorn" in lowered or "fastapi" in lowered:
         return "FastAPI 서버 실행 오류"
@@ -592,16 +595,40 @@ def _detect_error_type(user_input: str) -> str:
     if "button" in lowered or "onclick" in lowered or "addeventlistener" in lowered:
         return "프론트엔드 이벤트 연결 오류"
 
-    if "git" in lowered:
+    if "git" in lowered or "commit" in lowered or "push" in lowered:
         return "Git 작업 오류"
 
     return "일반 코드 문제"
 
 
+def _detect_severity(error_type: str, user_input: str) -> str:
+    lowered = user_input.lower()
+
+    if "500 internal server error" in lowered or "traceback" in lowered:
+        return "높음"
+
+    if error_type in [
+        "import / 모듈 연결 오류",
+        "FastAPI endpoint 내부 오류",
+        "FastAPI 서버 실행 오류",
+        "문법 오류",
+    ]:
+        return "높음"
+
+    if error_type in [
+        "프론트엔드 이벤트 연결 오류",
+        "Git 작업 오류",
+        "인코딩 오류",
+    ]:
+        return "보통"
+
+    return "낮음"
+
+
 def _extract_file_hints(user_input: str) -> list[str]:
     hints = []
 
-    candidates = [
+    known_files = [
         "main.py",
         "config.py",
         "core/command_parser.py",
@@ -619,33 +646,102 @@ def _extract_file_hints(user_input: str) -> list[str]:
 
     lowered = user_input.lower()
 
-    for candidate in candidates:
-        if candidate.lower() in lowered:
-            hints.append(candidate)
+    for file_name in known_files:
+        if file_name.lower() in lowered:
+            hints.append(file_name)
 
-    return hints
+    # Traceback의 Windows 경로 또는 일반 파일 경로에서 파일명 추출
+    path_pattern = r'([A-Za-z]:\\[^"\n]+?\.(?:py|js|html|css|env|txt)|[\w./\\-]+\.(?:py|js|html|css|env|txt))'
+    matches = re.findall(path_pattern, user_input)
+
+    for match in matches:
+        normalized = match.replace("\\", "/")
+        short_name = normalized.split("/")[-1]
+
+        if short_name and short_name not in hints:
+            hints.append(short_name)
+
+    return hints[:8]
 
 
 def _extract_line_hints(user_input: str) -> list[str]:
     hints = []
 
+    traceback_pattern = r'File "([^"]+)", line (\d+), in ([^\n]+)'
+    matches = re.findall(traceback_pattern, user_input)
+
+    for file_path, line_no, func_name in matches:
+        file_name = file_path.replace("\\", "/").split("/")[-1]
+        hints.append(f"{file_name} / line {line_no} / in {func_name.strip()}")
+
     for line in user_input.splitlines():
         lowered = line.lower()
 
-        if "line" in lowered or "줄" in lowered or "file" in lowered or "파일" in lowered:
-            hints.append(line.strip())
+        if "line" in lowered or "줄" in lowered:
+            cleaned = line.strip()
 
-    return hints[:5]
+            if cleaned and cleaned not in hints:
+                hints.append(cleaned)
+
+    return hints[:8]
+
+
+def _detect_command_hints(user_input: str) -> list[str]:
+    commands = []
+    lowered = user_input.lower()
+
+    if "uvicorn" in lowered or "fastapi" in lowered:
+        commands.append("uvicorn main:app --reload")
+
+    if "pytest" in lowered or "test" in lowered or "테스트" in lowered:
+        commands.append("python -m py_compile providers\\mock_provider.py")
+
+    if "git" in lowered or "commit" in lowered or "push" in lowered:
+        commands.extend([
+            "git status",
+            "git add .",
+            "git commit -m \"Fix code agent issue\"",
+            "git push origin main",
+        ])
+
+    if "importerror" in lowered or "cannot import" in lowered:
+        commands.append("python -c \"from providers.mock_provider import MockProvider, generate_response; print('mock provider ok')\"")
+
+    if "prompt_builder" in lowered or "/crenoba code" in lowered:
+        commands.append("python -c \"from core.prompt_builder import build_prompt; print(build_prompt('/crenoba code' + chr(10) + 'test')[:80])\"")
+
+    return commands
 
 
 def _make_code_cause_candidates(error_type: str, user_input: str) -> list[str]:
     lowered = user_input.lower()
 
+    if "mockprovider" in lowered and "cannot import" in lowered:
+        return [
+            "providers/mock_provider.py 안에 MockProvider class가 없거나 저장되지 않았을 가능성이 큽니다.",
+            "파일을 전체 교체하는 과정에서 마지막 Provider 진입점 부분이 누락되었을 수 있습니다.",
+            "서버가 이전 버전의 mock_provider.py를 보고 있을 수 있으므로 재시작이 필요합니다.",
+        ]
+
+    if "generate_response" in lowered and "cannot import" in lowered:
+        return [
+            "providers/mock_provider.py 안에 generate_response 함수가 없거나 이름이 다를 가능성이 큽니다.",
+            "core/ai_client.py가 기대하는 provider 진입점과 mock_provider.py 구조가 불일치합니다.",
+            "부분 복사로 인해 함수 정의가 누락되었을 수 있습니다.",
+        ]
+
+    if "_mock_code_response" in lowered and "not defined" in lowered:
+        return [
+            "generate_response 함수는 _mock_code_response를 호출하지만 실제 함수 정의가 파일 안에 없습니다.",
+            "Code Agent 부분이 빠진 상태로 Provider 진입점만 추가되었을 가능성이 큽니다.",
+            "mock_provider.py를 전체 교체해서 함수 정의와 진입점을 함께 맞춰야 합니다.",
+        ]
+
     if "mock response" in lowered and "code" in lowered:
         return [
             "/crenoba code가 Code Agent가 아니라 General Agent로 라우팅되고 있을 수 있습니다.",
-            "prompt_builder에서 CRENOBA CODE AGENT 문자열이 생성되지 않았을 수 있습니다.",
-            "mock_provider의 generate_response에서 CRENOBA CODE AGENT 분기 조건이 맞지 않을 수 있습니다.",
+            "core/prompt_builder.py에서 CRENOBA CODE AGENT 문자열이 생성되지 않았을 수 있습니다.",
+            "providers/mock_provider.py의 generate_response에서 CRENOBA CODE AGENT 분기 조건이 맞지 않을 수 있습니다.",
         ]
 
     if error_type == "문법 오류":
@@ -662,18 +758,11 @@ def _make_code_cause_candidates(error_type: str, user_input: str) -> list[str]:
             "현재 실행 위치가 프로젝트 루트가 아닐 수 있습니다.",
         ]
 
-    if error_type == "변수 또는 함수 이름 오류":
+    if error_type == "FastAPI endpoint 내부 오류":
         return [
-            "변수명 또는 함수명의 대소문자가 일치하지 않을 가능성이 큽니다.",
-            "정의되기 전에 함수를 호출했을 수 있습니다.",
-            "이전 버전 이름을 새 코드에서 그대로 사용했을 수 있습니다.",
-        ]
-
-    if error_type == "객체 속성 / 메서드 오류":
-        return [
-            "객체에 generate, call, run 같은 메서드가 없을 수 있습니다.",
-            "provider 구조가 함수형인지 클래스형인지 통일되지 않았을 수 있습니다.",
-            "어댑터가 실제 provider 객체를 제대로 감싸지 못했을 수 있습니다.",
+            "/relay 함수 내부에서 provider 호출 중 예외가 발생했을 가능성이 큽니다.",
+            "서버 자체는 켜졌지만 POST 요청 처리 중 Python 에러가 발생한 상태입니다.",
+            "Traceback 마지막 줄의 ImportError, NameError, TypeError를 기준으로 고쳐야 합니다.",
         ]
 
     if error_type == "인코딩 오류":
@@ -704,13 +793,46 @@ def _make_code_cause_candidates(error_type: str, user_input: str) -> list[str]:
     ]
 
 
-def _make_code_solution_steps(error_type: str) -> list[str]:
+def _make_code_solution_steps(error_type: str, user_input: str) -> list[str]:
+    lowered = user_input.lower()
+
+    if "_mock_code_response" in lowered and "not defined" in lowered:
+        return [
+            "providers/mock_provider.py를 전체 교체해서 _mock_code_response 함수가 포함되게 한다.",
+            "파일 맨 아래에 generate_response 함수와 MockProvider class가 있는지 확인한다.",
+            "python -m py_compile providers\\mock_provider.py로 문법을 검사한다.",
+            "MockProvider import 테스트를 실행한다.",
+            "서버를 재시작하고 웹 UI에서 /crenoba code를 다시 실행한다.",
+        ]
+
+    if "mockprovider" in lowered and "cannot import" in lowered:
+        return [
+            "providers/mock_provider.py 맨 아래에 MockProvider class가 있는지 확인한다.",
+            "class 이름이 MockProvider로 정확히 대소문자까지 일치하는지 확인한다.",
+            "저장 후 서버를 완전히 껐다가 다시 실행한다.",
+        ]
+
+    if "generate_response" in lowered and "cannot import" in lowered:
+        return [
+            "providers/mock_provider.py 맨 아래에 generate_response 함수가 있는지 확인한다.",
+            "core/ai_client.py에서 가져오는 이름과 실제 함수명이 같은지 확인한다.",
+            "저장 후 import 테스트를 먼저 실행한다.",
+        ]
+
     if error_type == "import / 모듈 연결 오류":
         return [
             "에러 메시지에서 import 실패한 함수명 또는 클래스명을 확인한다.",
             "해당 함수가 실제 파일에 정의되어 있는지 확인한다.",
             "main.py 또는 ai_client.py에서 import하는 이름과 실제 함수명을 맞춘다.",
             "서버를 재시작해서 import 에러가 사라졌는지 확인한다.",
+        ]
+
+    if error_type == "FastAPI endpoint 내부 오류":
+        return [
+            "터미널 Traceback의 가장 마지막 에러 줄을 확인한다.",
+            "main.py의 /relay 함수에서 호출되는 provider 연결 부분을 확인한다.",
+            "core/ai_client.py가 어떤 provider 함수 또는 클래스를 import하는지 확인한다.",
+            "해당 provider 파일에 같은 이름의 함수 또는 클래스가 있는지 확인한다.",
         ]
 
     if error_type == "인코딩 오류":
@@ -743,13 +865,59 @@ def _make_code_solution_steps(error_type: str) -> list[str]:
     ]
 
 
+def _make_fix_direction(error_type: str, file_hints: list[str]) -> str:
+    if error_type in ["import / 모듈 연결 오류", "FastAPI endpoint 내부 오류"]:
+        return """
+수정 방향:
+1. import하는 쪽 파일과 import당하는 쪽 파일을 같이 확인한다.
+2. 호출하는 이름과 실제 정의된 이름을 정확히 맞춘다.
+3. provider 파일은 함수형 진입점과 class형 진입점을 모두 유지한다.
+4. 수정 후 import 테스트를 먼저 통과시킨 뒤 서버를 실행한다.
+""".strip()
+
+    if error_type == "프론트엔드 이벤트 연결 오류":
+        return """
+수정 방향:
+1. HTML id와 JavaScript getElementById 이름을 일치시킨다.
+2. 버튼 이벤트는 addEventListener로 연결한다.
+3. script 경로와 브라우저 캐시를 확인한다.
+""".strip()
+
+    if error_type == "Git 작업 오류":
+        return """
+수정 방향:
+1. git status로 현재 상태를 확인한다.
+2. Git 사용자 정보와 remote 연결을 확인한다.
+3. add → commit → push 순서로 다시 진행한다.
+""".strip()
+
+    if file_hints:
+        return f"""
+수정 방향:
+1. 먼저 감지된 파일 후보를 연다: {", ".join(file_hints)}
+2. 에러 로그의 마지막 줄과 파일 내부 함수명을 비교한다.
+3. 최근 수정한 코드부터 되돌아보며 원인을 좁힌다.
+""".strip()
+
+    return """
+수정 방향:
+1. 에러 로그 전체를 확인한다.
+2. 가장 마지막 에러 줄을 기준으로 원인을 찾는다.
+3. 최근 수정한 파일부터 하나씩 확인한다.
+""".strip()
+
+
 def _mock_code_response(prompt: str) -> str:
     user_input = _extract_user_input(prompt)
+
     error_type = _detect_error_type(user_input)
+    severity = _detect_severity(error_type, user_input)
     file_hints = _extract_file_hints(user_input)
     line_hints = _extract_line_hints(user_input)
+    command_hints = _detect_command_hints(user_input)
     cause_candidates = _make_code_cause_candidates(error_type, user_input)
-    solution_steps = _make_code_solution_steps(error_type)
+    solution_steps = _make_code_solution_steps(error_type, user_input)
+    fix_direction = _make_fix_direction(error_type, file_hints)
 
     if file_hints:
         file_text = "\n".join(f"- {file}" for file in file_hints)
@@ -761,8 +929,13 @@ def _mock_code_response(prompt: str) -> str:
     else:
         line_text = "- 아직 줄 번호 정보가 감지되지 않았습니다."
 
+    if command_hints:
+        command_text = "\n".join(command_hints)
+    else:
+        command_text = "uvicorn main:app --reload"
+
     return f"""
-# CRENOBA Code Agent v0.8
+# CRENOBA Code Agent v0.8.1
 
 입력 내용:
 {user_input}
@@ -773,7 +946,9 @@ def _mock_code_response(prompt: str) -> str:
 
 현재 입력은 **{error_type}** 유형으로 판단됩니다.
 
-Code Agent 기준으로 보면, 먼저 에러 로그의 마지막 줄과 최근 수정한 파일을 기준으로 원인을 좁혀야 합니다.
+심각도: **{severity}**
+
+Code Agent 기준으로 보면, 먼저 터미널 Traceback의 마지막 줄과 최근 수정한 파일을 기준으로 원인을 좁혀야 합니다.
 
 ---
 
@@ -801,39 +976,26 @@ Code Agent 기준으로 보면, 먼저 에러 로그의 마지막 줄과 최근 
 
 ---
 
-## 5. 수정 코드
+## 5. 수정 방향
 
-현재 mock provider 단계에서는 실제 코드를 자동 수정하지는 않습니다.
+{fix_direction}
 
-다만 다음 방식으로 수정하는 것이 좋습니다.
-
-1. 에러가 난 파일을 연다.
-2. 에러 메시지에 나온 함수명 / 변수명 / import 이름을 확인한다.
-3. 실제 파일에 존재하는 이름과 호출하는 이름을 일치시킨다.
-4. 수정 후 서버를 재실행한다.
-
-코드 수정이 필요한 경우에는 해당 파일 전체 코드를 입력하면, CRENOBA Code Agent가 전체 파일 기준으로 수정안을 만들도록 설계할 수 있습니다.
+현재 mock provider 단계에서는 실제 파일을 자동 수정하지는 않습니다.
+다만 에러 유형별로 어떤 파일을 봐야 하는지, 어떤 순서로 고쳐야 하는지를 안내합니다.
 
 ---
 
 ## 6. 테스트 방법
 
-FastAPI 서버 기준 테스트:
+아래 명령어를 순서대로 실행해서 확인하세요.
 
-uvicorn main:app --reload
-
-브라우저 UI 테스트:
-
-http://127.0.0.1:8000
-Ctrl + Shift + R
-
-명령어 라우팅 테스트:
-
-python -c "from core.prompt_builder import build_prompt; print(build_prompt('/crenoba code' + chr(10) + 'test')[:80])"
+{command_text}
 
 정상 기준:
-
-# CRENOBA CODE AGENT v0.8
+- Python import 테스트에서 에러가 없어야 합니다.
+- uvicorn main:app --reload 실행 후 Application startup complete가 떠야 합니다.
+- 웹 UI에서 /crenoba code 실행 시 500 Internal Server Error가 없어야 합니다.
+- 출력 제목이 CRENOBA Code Agent v0.8.1로 시작해야 합니다.
 
 ---
 
@@ -843,7 +1005,7 @@ python -c "from core.prompt_builder import build_prompt; print(build_prompt('/cr
 
 git status
 git add .
-git commit -m "Improve code agent debugging response"
+git commit -m "Improve code agent diagnostics"
 git push origin main
 git status
 
@@ -1002,14 +1164,14 @@ def _mock_relay_response(prompt: str) -> str:
 {user_input}
 
 ## 1. 현재 버전
-CRENOBA v0.8
+CRENOBA v0.8.1
 
 ## 2. 완료된 작업
 - Core Agent 기본 구조
 - mock provider 연결
 - Web UI 연결
 - Task Agent v0.7.4 고도화 완료
-- Code Agent v0.8 고도화 진행
+- Code Agent v0.8.1 진단 응답 개선 진행
 
 ## 3. 중요한 결정
 - CRENOBA는 브랜드형 챗봇이 아니라 목적별 업무 보조 Agent 시스템이다.
@@ -1039,7 +1201,7 @@ def _mock_default_response(prompt: str) -> str:
 {user_input}
 
 현재 mock provider가 정상 작동 중입니다.
-Agent별 고도화는 v0.8부터 Code Agent 중심으로 진행합니다.
+Agent별 고도화는 v0.8.1부터 Code Agent 중심으로 진행합니다.
 """.strip()
 
 
