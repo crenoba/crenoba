@@ -1,133 +1,204 @@
-# providers/ollama_provider.py
-
-"""
-CRENOBA Ollama Provider
-
-v0.9.3 목표:
-- 외부 API 없이 데스크톱에서 로컬 LLM을 실행한다.
-- Ollama local API를 통해 CRENOBA가 모델을 호출한다.
-- 로컬 모델이 너무 길게 답하지 않도록 출력 길이를 제한한다.
-- keep_alive로 모델을 일정 시간 메모리에 유지해 반복 호출 속도를 개선한다.
-"""
-
+import os
 import requests
-
-from config import OLLAMA_BASE_URL, OLLAMA_MODEL
 
 
 class OllamaProvider:
     """
-    Ollama 로컬 AI Provider.
+    CRENOBA Ollama Local Provider
+    v0.9.4 Hotfix 2
+    - qwen3 thinking field 문제 해결
+    - top-level think=False 적용
+    - content empty debug 유지
+    - 응답 속도 개선
     """
 
     def __init__(self):
-        self.base_url = (OLLAMA_BASE_URL or "http://localhost:11434").rstrip("/")
-        self.model_name = OLLAMA_MODEL or "qwen2.5-coder:7b-instruct"
-        self.endpoint = f"{self.base_url}/api/chat"
+        self.base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+        self.default_model = os.getenv("OLLAMA_MODEL", "qwen3:14b")
 
-    def generate(self, prompt: str) -> str:
-        """
-        Ollama 로컬 API에 prompt를 보내고 text 응답을 반환한다.
-        """
-        if not prompt:
-            return "입력 prompt가 비어 있습니다."
+    def generate(
+        self,
+        prompt: str,
+        model_override: str | None = None,
+        agent: str = "general",
+        mode: str = "general",
+    ) -> str:
+        model = model_override or self.default_model
+        url = f"{self.base_url}/api/chat"
+
+        system_prompt = self._build_system_prompt(agent, mode)
+
+        user_prompt = f"""
+아래 요청에 대해 최종 답변만 작성해.
+생각 과정은 출력하지 마.
+답변이 길 필요 없으면 짧고 명확하게 답해.
+
+사용자 요청:
+{prompt}
+""".strip()
 
         payload = {
-            "model": self.model_name,
+            "model": model,
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "너는 CRENOBA 로컬 AI Agent다. "
-                        "사용자의 업무, 코딩, 공부, 프로젝트 관리를 돕는다. "
-                        "항상 한국어로 답한다. "
-                        "사용자가 짧게 답하라고 하면 반드시 1~3문장만 답한다. "
-                        "사용자의 문장을 확대해석하지 말고, 요청한 내용에만 답한다. "
-                        "코드 수정이 필요하면 가능한 한 관련 파일 전체 코드를 제공한다."
-                    ),
+                    "content": system_prompt,
                 },
                 {
                     "role": "user",
-                    "content": prompt,
+                    "content": user_prompt,
                 },
             ],
+
+            # 중요:
+            # qwen3 계열이 content 대신 thinking에 토큰을 전부 쓰는 문제 방지
+            "think": False,
+
             "stream": False,
             "keep_alive": "30m",
             "options": {
                 "temperature": 0.2,
-                "num_predict": 300,
-                "num_ctx": 4096,
+                "num_predict": 220,
+                "num_ctx": 2048,
+                "top_p": 0.9,
             },
         }
 
         try:
-            response = requests.post(
-                self.endpoint,
-                json=payload,
-                timeout=300,
-            )
+            response = requests.post(url, json=payload, timeout=120)
 
             if response.status_code != 200:
                 return (
-                    "# CRENOBA Ollama Provider Error\n\n"
-                    "Ollama 로컬 API 호출 중 오류가 발생했습니다.\n\n"
-                    f"모델: {self.model_name}\n"
-                    f"Base URL: {self.base_url}\n"
-                    f"HTTP 상태 코드: {response.status_code}\n"
-                    f"응답 내용: {response.text[:1000]}\n\n"
-                    "확인할 것:\n"
-                    "1. Ollama가 설치되어 실행 중인지 확인\n"
-                    "2. PowerShell에서 `Invoke-RestMethod http://localhost:11434/api/tags` 실행\n"
-                    "3. `.env`의 OLLAMA_MODEL 이름이 실제 모델명과 같은지 확인\n"
-                    "4. 모델 다운로드가 완료됐는지 확인"
+                    "[CRENOBA Ollama Error]\n"
+                    f"Status Code: {response.status_code}\n"
+                    f"Response: {response.text}"
                 )
 
             data = response.json()
-
             message = data.get("message", {})
             content = message.get("content", "")
 
-            if content:
-                return content.strip()
+            cleaned = self._clean_output(content)
 
-            return str(data)
+            if cleaned:
+                return cleaned
+
+            return self._empty_response_debug(data, model, agent, mode)
 
         except requests.exceptions.ConnectionError:
             return (
-                "# CRENOBA Ollama Provider Error\n\n"
+                "[CRENOBA Ollama Connection Error]\n"
                 "Ollama 서버에 연결할 수 없습니다.\n\n"
-                f"Base URL: {self.base_url}\n"
-                f"모델: {self.model_name}\n\n"
-                "해결 방법:\n"
-                "1. Ollama를 실행하세요.\n"
-                "2. `Invoke-RestMethod http://localhost:11434/api/tags` 실행\n"
-                "3. Ollama가 꺼져 있으면 시작 메뉴에서 Ollama를 실행하세요."
+                "확인 명령:\n"
+                "Invoke-RestMethod http://localhost:11434/api/tags"
             )
 
         except requests.exceptions.Timeout:
             return (
-                "# CRENOBA Ollama Provider Error\n\n"
-                "Ollama 응답 시간이 너무 오래 걸려 timeout이 발생했습니다.\n\n"
-                f"모델: {self.model_name}\n\n"
+                "[CRENOBA Ollama Timeout]\n"
+                "로컬 모델 응답 시간이 너무 오래 걸렸습니다.\n\n"
                 "해결 방법:\n"
-                "1. 더 작은 모델로 변경하세요. 예: qwen2.5-coder:7b-instruct 또는 gemma3:4b\n"
-                "2. 처음 실행은 모델 로딩 때문에 오래 걸릴 수 있으니 다시 시도하세요.\n"
-                "3. 작업 관리자에서 GPU/CPU/RAM 사용량을 확인하세요."
+                "1. num_predict 값을 더 줄이기\n"
+                "2. qwen3:14b 대신 더 작은 모델 사용\n"
+                "3. Ollama 서버 재시작\n"
             )
 
         except Exception as e:
-            return (
-                "# CRENOBA Ollama Provider Error\n\n"
-                "Ollama 로컬 API 호출 중 예외가 발생했습니다.\n\n"
-                f"모델: {self.model_name}\n"
-                f"Base URL: {self.base_url}\n"
-                f"오류: {e}\n\n"
-                "확인할 것:\n"
-                "1. requests 패키지 설치 여부 확인\n"
-                "2. OLLAMA_BASE_URL 값 확인\n"
-                "3. OLLAMA_MODEL 값 확인\n"
-                "4. Ollama 모델 다운로드 여부 확인"
-            )
+            return f"[CRENOBA Ollama Unknown Error]\n{str(e)}"
+
+    def _build_system_prompt(self, agent: str, mode: str) -> str:
+        base = """
+너는 CRENOBA 로컬 AI Agent다.
+항상 한국어로 답한다.
+생각 과정은 출력하지 않는다.
+최종 답변만 출력한다.
+사용자의 요청을 확대해석하지 않는다.
+짧게 답하라는 요청이 있으면 1~3문장으로 답한다.
+코드 수정이 필요하면 관련 파일 전체 코드를 제공한다.
+""".strip()
+
+        agent_prompts = {
+            "code": """
+현재 Agent는 Code Agent다.
+코딩, 디버깅, 에러 분석, 파일 수정, 테스트 방법 안내를 우선한다.
+답변 구조는 문제 요약, 원인, 수정 코드, 테스트 방법 순서로 작성한다.
+""".strip(),
+
+            "task": """
+현재 Agent는 Task Agent다.
+할 일을 우선순위, 긴급도, 예상 시간, 실행 순서로 정리한다.
+바로 실행 가능한 다음 행동 1개를 반드시 제시한다.
+""".strip(),
+
+            "study": """
+현재 Agent는 Study Agent다.
+개념을 쉽게 설명하고, 필요한 경우 공식과 예시를 함께 제공한다.
+사용자가 이해하기 쉽게 단계별로 설명한다.
+""".strip(),
+
+            "report": """
+현재 Agent는 Report Agent다.
+보고서, 문서, 발표 자료에 넣기 좋은 문장으로 정리한다.
+문장은 깔끔하고 전문적으로 작성한다.
+""".strip(),
+
+            "project": """
+현재 Agent는 Project Agent다.
+프로젝트 진행 상황, 다음 작업, 위험 요소, 체크리스트를 중심으로 정리한다.
+""".strip(),
+
+            "apollo": """
+현재 Agent는 Apollo Agent다.
+자율주행, OpenCV, Arduino, 모터 제어, 공학 계산 관련 도움을 우선한다.
+실험과 실제 구현 관점에서 설명한다.
+""".strip(),
+
+            "relay": """
+현재 Agent는 Relay Agent다.
+새 채팅으로 인수인계할 수 있도록 현재 상태, 버전, 결정 사항, 다음 작업을 문서화한다.
+""".strip(),
+        }
+
+        return base + "\n\n" + agent_prompts.get(agent, "현재 Agent는 General Agent다.")
+
+    def _clean_output(self, text: str) -> str:
+        if not text:
+            return ""
+
+        cleaned = text.strip()
+
+        if "</think>" in cleaned:
+            cleaned = cleaned.split("</think>", 1)[1].strip()
+
+        cleaned = cleaned.replace("<think>", "").replace("</think>", "").strip()
+
+        return cleaned
+
+    def _empty_response_debug(self, data: dict, model: str, agent: str, mode: str) -> str:
+        message = data.get("message", {})
+        done_reason = data.get("done_reason", "unknown")
+        total_duration = data.get("total_duration", "unknown")
+        eval_count = data.get("eval_count", "unknown")
+
+        thinking = message.get("thinking", "")
+        thinking_preview = thinking[:300] if thinking else ""
+
+        return (
+            "[CRENOBA Ollama Empty Response]\n"
+            "Ollama 호출은 성공했지만 최종 답변 content가 비어 있습니다.\n\n"
+            f"Model: {model}\n"
+            f"Agent: {agent}\n"
+            f"Mode: {mode}\n"
+            f"Done Reason: {done_reason}\n"
+            f"Total Duration: {total_duration}\n"
+            f"Eval Count: {eval_count}\n"
+            f"Message Keys: {list(message.keys())}\n\n"
+            f"Thinking Preview: {thinking_preview}\n\n"
+            "해결 방향:\n"
+            "1. payload 최상위에 think=False를 적용했습니다.\n"
+            "2. 그래도 비어 있으면 Ollama 버전 또는 qwen3 모델 동작 문제일 수 있습니다.\n"
+            "3. 계속 반복되면 qwen2.5-coder:7b-instruct 같은 non-thinking 계열 모델 사용을 추천합니다."
+        )
 
     def call(self, prompt: str) -> str:
         return self.generate(prompt)
@@ -137,8 +208,4 @@ class OllamaProvider:
 
 
 def generate_response(prompt: str) -> str:
-    """
-    함수형 호출도 지원하기 위한 진입점.
-    """
-    provider = OllamaProvider()
-    return provider.generate(prompt)
+    return OllamaProvider().generate(prompt)

@@ -1,120 +1,90 @@
-# providers/openrouter_provider.py
-
-"""
-CRENOBA OpenRouter Provider
-
-v0.9.1 목표:
-- Gemini 403 문제가 있을 때 OpenRouter를 대체 실제 AI Provider로 사용한다.
-- OpenRouter의 OpenAI-compatible chat completions API를 호출한다.
-- main.py / ai_client.py에서는 다른 Provider와 동일하게 generate(prompt)를 호출한다.
-"""
-
+import os
 import requests
-
-from config import OPENROUTER_API_KEY, OPENROUTER_MODEL
 
 
 class OpenRouterProvider:
     """
-    OpenRouter 실제 API Provider.
+    CRENOBA OpenRouter Provider
     """
 
     def __init__(self):
-        if not OPENROUTER_API_KEY:
-            raise ValueError(
-                "OPENROUTER_API_KEY is missing. "
-                "Create a .env file and set OPENROUTER_API_KEY first."
+        self.api_key = os.getenv("OPENROUTER_API_KEY", "")
+        self.default_model = os.getenv("OPENROUTER_MODEL", "openrouter/free")
+        self.base_url = "https://openrouter.ai/api/v1/chat/completions"
+
+    def generate(
+        self,
+        prompt: str,
+        model_override: str | None = None,
+        agent: str = "general",
+        mode: str = "general",
+    ) -> str:
+        if not self.api_key:
+            return (
+                "[CRENOBA OpenRouter Error]\n"
+                "OPENROUTER_API_KEY가 .env에 설정되어 있지 않습니다."
             )
 
-        self.model_name = OPENROUTER_MODEL or "openrouter/free"
-        self.api_key = OPENROUTER_API_KEY
-        self.endpoint = "https://openrouter.ai/api/v1/chat/completions"
-
-    def generate(self, prompt: str) -> str:
-        """
-        OpenRouter API에 prompt를 보내고 text 응답을 반환한다.
-        """
-        if not prompt:
-            return "입력 prompt가 비어 있습니다."
+        model = model_override or self.default_model
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "http://127.0.0.1:8000",
-            "X-Title": "CRENOBA Local Agent",
+            "HTTP-Referer": "http://localhost:8000",
+            "X-Title": "CRENOBA",
         }
 
         payload = {
-            "model": self.model_name,
+            "model": model,
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "You are CRENOBA, a Korean task, coding, study, "
-                        "project, report, and Apollo assistant. "
-                        "Answer in Korean unless the user asks otherwise."
-                    ),
+                    "content": self._build_system_prompt(agent, mode),
                 },
                 {
                     "role": "user",
                     "content": prompt,
                 },
             ],
+            "temperature": 0.2,
+            "max_tokens": 800,
         }
 
         try:
             response = requests.post(
-                self.endpoint,
+                self.base_url,
                 headers=headers,
                 json=payload,
-                timeout=60,
+                timeout=120,
             )
 
             if response.status_code != 200:
                 return (
-                    "# CRENOBA OpenRouter Provider Error\n\n"
-                    "OpenRouter API 호출 중 오류가 발생했습니다.\n\n"
-                    f"모델: {self.model_name}\n"
-                    f"HTTP 상태 코드: {response.status_code}\n"
-                    f"응답 내용: {response.text[:1000]}\n\n"
-                    "확인할 것:\n"
-                    "1. .env에 OPENROUTER_API_KEY가 들어갔는지 확인\n"
-                    "2. OPENROUTER_MODEL 이름이 올바른지 확인\n"
-                    "3. OpenRouter 무료 모델 사용 한도 또는 rate limit 확인\n"
-                    "4. 인터넷 연결 상태 확인"
+                    "[CRENOBA OpenRouter Error]\n"
+                    f"Status Code: {response.status_code}\n"
+                    f"Response: {response.text}"
                 )
 
             data = response.json()
+            return data["choices"][0]["message"]["content"].strip()
 
-            choices = data.get("choices", [])
-
-            if not choices:
-                return (
-                    "# CRENOBA OpenRouter Provider Error\n\n"
-                    "OpenRouter 응답에 choices가 없습니다.\n\n"
-                    f"응답 내용: {data}"
-                )
-
-            message = choices[0].get("message", {})
-            content = message.get("content", "")
-
-            if content:
-                return content
-
-            return str(data)
+        except requests.exceptions.Timeout:
+            return (
+                "[CRENOBA OpenRouter Timeout]\n"
+                "OpenRouter 응답 시간이 너무 오래 걸렸습니다."
+            )
 
         except Exception as e:
-            return (
-                "# CRENOBA OpenRouter Provider Error\n\n"
-                "OpenRouter API 호출 중 예외가 발생했습니다.\n\n"
-                f"모델: {self.model_name}\n"
-                f"오류: {e}\n\n"
-                "확인할 것:\n"
-                "1. requests 패키지 설치 여부 확인\n"
-                "2. .env의 OPENROUTER_API_KEY 확인\n"
-                "3. 네트워크 연결 확인\n"
-                "4. OPENROUTER_MODEL 값 확인"
-            )
+            return f"[CRENOBA OpenRouter Unknown Error]\n{str(e)}"
+
+    def _build_system_prompt(self, agent: str, mode: str) -> str:
+        return f"""
+너는 CRENOBA의 {agent} Agent다.
+항상 한국어로 답한다.
+사용자의 요청을 실무적으로 처리한다.
+코드 수정이 필요하면 관련 파일 전체 코드를 제공한다.
+현재 mode는 {mode}다.
+""".strip()
 
     def call(self, prompt: str) -> str:
         return self.generate(prompt)
@@ -124,8 +94,4 @@ class OpenRouterProvider:
 
 
 def generate_response(prompt: str) -> str:
-    """
-    함수형 호출도 지원하기 위한 진입점.
-    """
-    provider = OpenRouterProvider()
-    return provider.generate(prompt)
+    return OpenRouterProvider().generate(prompt)

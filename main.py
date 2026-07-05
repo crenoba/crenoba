@@ -1,35 +1,50 @@
-# main.py
+import time
+from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from config import AI_PROVIDER
-from core.command_parser import parse_command
-from core.prompt_builder import build_prompt
-from core.ai_client import get_ai_client
+load_dotenv()
+
+from core.ai_client import AIClient
 
 
-app = FastAPI(title="CRENOBA Core Agent")
+APP_VERSION = "v0.9.4.1"
+
+app = FastAPI(
+    title="CRENOBA",
+    description="CRENOBA Agent System",
+    version=APP_VERSION,
+)
+
+client = AIClient()
 
 
-class AgentRequest(BaseModel):
+class RelayRequest(BaseModel):
     prompt: str
 
 
-@app.post("/relay")
-def relay(req: AgentRequest):
-    parsed = parse_command(req.prompt)
-    mode = parsed.get("mode", "general")
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
 
-    prompt = build_prompt(req.prompt, mode)
-    ai_client = get_ai_client(AI_PROVIDER)
-    output = ai_client.generate(prompt)
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/")
+def index():
+    index_file = STATIC_DIR / "index.html"
+
+    if index_file.exists():
+        return FileResponse(str(index_file))
 
     return {
-        "provider": AI_PROVIDER,
-        "mode": mode,
-        "output": output,
+        "app": "CRENOBA",
+        "version": APP_VERSION,
+        "message": "static/index.html 파일을 찾을 수 없습니다.",
     }
 
 
@@ -37,8 +52,26 @@ def relay(req: AgentRequest):
 def health():
     return {
         "status": "ok",
-        "provider": AI_PROVIDER,
+        "app": "CRENOBA",
+        "version": APP_VERSION,
     }
 
 
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+@app.post("/relay")
+def relay(req: RelayRequest):
+    start_time = time.perf_counter()
+
+    result = client.generate(req.prompt)
+
+    end_time = time.perf_counter()
+    elapsed_sec = round(end_time - start_time, 2)
+
+    return {
+        "output": result.get("output", ""),
+        "mode": result.get("mode", "general"),
+        "agent": result.get("agent", "general"),
+        "provider": result.get("provider", "unknown"),
+        "model": result.get("model", "unknown"),
+        "response_time_sec": elapsed_sec,
+        "version": APP_VERSION,
+    }

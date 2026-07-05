@@ -1,216 +1,242 @@
 const promptInput = document.getElementById("promptInput");
-const outputBox = document.getElementById("outputBox");
-
 const runBtn = document.getElementById("runBtn");
-const clearInputBtn = document.getElementById("clearInputBtn");
-const copyOutputBtn = document.getElementById("copyOutputBtn");
+const clearBtn = document.getElementById("clearBtn");
+const copyBtn = document.getElementById("copyBtn");
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
 
-const providerStatus = document.getElementById("providerStatus");
-const modeStatus = document.getElementById("modeStatus");
-const agentStatus = document.getElementById("agentStatus");
-const readyStatus = document.getElementById("readyStatus");
-const commandStatus = document.getElementById("commandStatus");
-const responseAgentStatus = document.getElementById("responseAgentStatus");
-const responseProviderStatus = document.getElementById("responseProviderStatus");
+const outputBox = document.getElementById("outputBox");
 const historyList = document.getElementById("historyList");
 
-const HISTORY_KEY = "crenoba_command_history_v07";
+const statusDot = document.getElementById("statusDot");
+const statusText = document.getElementById("statusText");
 
-const commandExamples = {
-  "/crenoba task": `/crenoba task
-오늘 해야 할 일:
-- CRENOBA v0.7 Task Agent 고도화
-- 웹 UI v0.7 적용
-- mock provider 테스트
-- GitHub에 작업 내용 올리기`,
+const modeValue = document.getElementById("modeValue");
+const agentValue = document.getElementById("agentValue");
+const providerValue = document.getElementById("providerValue");
+const modelValue = document.getElementById("modelValue");
+const timeValue = document.getElementById("timeValue");
+const versionValue = document.getElementById("versionValue");
 
-  "/crenoba study": `/crenoba study
-공부할 내용:
-- 핵심 개념 정리
-- 예제 풀이
-- 헷갈리는 부분 질문 만들기`,
+const HISTORY_KEY = "crenoba_command_history_v0941";
 
-  "/crenoba code": `/crenoba code
-코드 문제:
-- 에러 메시지 붙여넣기
-- 문제가 생긴 파일 설명
-- 원하는 동작 설명`,
-
-  "/crenoba report": `/crenoba report
-보고서 주제:
-- 목적
-- 들어가야 할 내용
-- 발표 또는 제출 형식`,
-
-  "/crenoba project": `/crenoba project
-프로젝트 상태:
-- 완료한 것
-- 진행 중인 것
-- 막힌 것
-- 다음 목표`,
-
-  "/crenoba apollo": `/crenoba apollo
-Apollo 작업:
-- OpenCV 차선 인식
-- Arduino 모터 제어
-- INPOS / Encoder / 브레이크 테스트`,
-
-  "/crenoba relay": `/crenoba relay
-현재 작업 상태를 다음 채팅에서도 이어갈 수 있게 정리해줘.`
-};
-
-function detectCommand(text) {
-  const firstLine = text.trim().split("\n")[0].trim();
-
-  if (firstLine.startsWith("/crenoba task")) return "task";
-  if (firstLine.startsWith("/crenoba study")) return "study";
-  if (firstLine.startsWith("/crenoba code")) return "code";
-  if (firstLine.startsWith("/crenoba report")) return "report";
-  if (firstLine.startsWith("/crenoba project")) return "project";
-  if (firstLine.startsWith("/crenoba apollo")) return "apollo";
-  if (firstLine.startsWith("/crenoba relay")) return "relay";
-
-  return "general";
+function setStatus(type, text) {
+    statusDot.className = `status-dot ${type}`;
+    statusText.textContent = text;
 }
 
-function updateStatus(mode, provider = "mock") {
-  const agentName = mode === "general" ? "-" : `${mode} agent`;
-
-  providerStatus.textContent = provider;
-  modeStatus.textContent = mode;
-  agentStatus.textContent = agentName;
-
-  commandStatus.textContent = mode;
-  responseAgentStatus.textContent = agentName;
-  responseProviderStatus.textContent = provider;
-}
-
-function getHistory() {
-  try {
-    return JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
-  } catch {
-    return [];
-  }
-}
-
-function saveHistory(prompt) {
-  const history = getHistory();
-  const trimmed = prompt.trim();
-
-  if (!trimmed) return;
-
-  const nextHistory = [
-    trimmed,
-    ...history.filter((item) => item !== trimmed)
-  ].slice(0, 8);
-
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(nextHistory));
-  renderHistory();
-}
-
-function renderHistory() {
-  const history = getHistory();
-  historyList.innerHTML = "";
-
-  if (history.length === 0) {
-    historyList.innerHTML = `<p class="empty">아직 실행 기록이 없습니다.</p>`;
-    return;
-  }
-
-  history.forEach((item) => {
-    const div = document.createElement("div");
-    div.className = "history-item";
-    div.textContent = item.length > 120 ? `${item.slice(0, 120)}...` : item;
-    div.addEventListener("click", () => {
-      promptInput.value = item;
-      updateStatus(detectCommand(item));
-    });
-    historyList.appendChild(div);
-  });
+function updateMetadata(data) {
+    modeValue.textContent = data.mode || "general";
+    agentValue.textContent = data.agent || "general";
+    providerValue.textContent = data.provider || "unknown";
+    modelValue.textContent = data.model || "unknown";
+    timeValue.textContent = data.response_time_sec ? `${data.response_time_sec}s` : "-";
+    versionValue.textContent = data.version || "v0.9.4.1";
 }
 
 async function runAgent() {
-  const prompt = promptInput.value.trim();
+    const prompt = promptInput.value.trim();
 
-  if (!prompt) {
-    outputBox.textContent = "입력 내용이 없습니다.";
-    return;
-  }
-
-  const mode = detectCommand(prompt);
-  updateStatus(mode);
-
-  readyStatus.textContent = "실행 중...";
-  outputBox.textContent = "CRENOBA Agent 실행 중...";
-
-  try {
-    const response = await fetch("/relay", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ prompt })
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+    if (!prompt) {
+        outputBox.textContent = "명령어와 요청을 입력해주세요.";
+        setStatus("error", "Empty Input");
+        return;
     }
 
-    const data = await response.json();
+    setStatus("running", "Running");
+    runBtn.disabled = true;
+    outputBox.textContent = "CRENOBA Agent가 응답을 생성하는 중입니다...";
 
-    const provider = data.provider || "mock";
-    const resultMode = data.mode || mode;
-    const output = data.output || JSON.stringify(data, null, 2);
+    try {
+        const response = await fetch("/relay", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ prompt }),
+        });
 
-    updateStatus(resultMode, provider);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
 
-    readyStatus.textContent = "완료";
-    outputBox.textContent = output;
+        const data = await response.json();
+        const output = data.output || JSON.stringify(data, null, 2);
 
-    saveHistory(prompt);
-  } catch (error) {
-    readyStatus.textContent = "오류";
-    outputBox.textContent = `에러가 발생했습니다.\n\n${error.message}`;
-  }
+        outputBox.textContent = output;
+
+        updateMetadata(data);
+        saveHistory(prompt, data);
+        renderHistory();
+
+        setStatus("done", "Complete");
+    } catch (error) {
+        outputBox.textContent = [
+            "[CRENOBA UI Error]",
+            "서버 요청 중 문제가 발생했습니다.",
+            "",
+            `Detail: ${error.message}`,
+            "",
+            "확인할 것:",
+            "1. uvicorn 서버가 켜져 있는지 확인",
+            "2. http://127.0.0.1:8000 으로 접속했는지 확인",
+            "3. /relay API가 정상 작동하는지 확인",
+        ].join("\n");
+
+        setStatus("error", "Error");
+    } finally {
+        runBtn.disabled = false;
+    }
 }
 
-runBtn.addEventListener("click", runAgent);
+function clearInput() {
+    promptInput.value = "";
+    outputBox.textContent = "아직 실행된 명령이 없습니다.";
 
-clearInputBtn.addEventListener("click", () => {
-  promptInput.value = "";
-  promptInput.focus();
-});
+    modeValue.textContent = "general";
+    agentValue.textContent = "general";
+    providerValue.textContent = "waiting";
+    modelValue.textContent = "waiting";
+    timeValue.textContent = "-";
+    versionValue.textContent = "v0.9.4.1";
 
-copyOutputBtn.addEventListener("click", async () => {
-  try {
-    await navigator.clipboard.writeText(outputBox.textContent);
-    copyOutputBtn.textContent = "Copied";
-    setTimeout(() => {
-      copyOutputBtn.textContent = "Copy Output";
-    }, 900);
-  } catch {
-    outputBox.textContent += "\n\n복사에 실패했습니다.";
-  }
-});
+    setStatus("idle", "Ready");
+}
 
-clearHistoryBtn.addEventListener("click", () => {
-  localStorage.removeItem(HISTORY_KEY);
-  renderHistory();
-});
+async function copyOutput() {
+    const text = outputBox.textContent.trim();
 
-document.querySelectorAll("[data-command]").forEach((button) => {
-  button.addEventListener("click", () => {
-    const command = button.dataset.command;
-    promptInput.value = commandExamples[command] || command;
-    updateStatus(detectCommand(promptInput.value));
+    if (!text) {
+        return;
+    }
+
+    try {
+        await navigator.clipboard.writeText(text);
+        setStatus("done", "Copied");
+    } catch {
+        setStatus("error", "Copy Failed");
+    }
+}
+
+function insertCommand(command) {
+    const current = promptInput.value.trim();
+
+    if (!current) {
+        promptInput.value = `${command}\n`;
+    } else {
+        const lines = current.split("\n");
+        const firstLine = lines[0].trim();
+
+        if (firstLine.startsWith("/")) {
+            lines[0] = command;
+            promptInput.value = lines.join("\n");
+        } else {
+            promptInput.value = `${command}\n${current}`;
+        }
+    }
+
     promptInput.focus();
-  });
+}
+
+function getHistory() {
+    try {
+        return JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
+    } catch {
+        return [];
+    }
+}
+
+function saveHistory(prompt, data) {
+    const history = getHistory();
+
+    const item = {
+        prompt,
+        mode: data.mode || "general",
+        agent: data.agent || "general",
+        provider: data.provider || "unknown",
+        model: data.model || "unknown",
+        responseTimeSec: data.response_time_sec || null,
+        version: data.version || "v0.9.4.1",
+        createdAt: new Date().toLocaleString("ko-KR"),
+    };
+
+    const nextHistory = [item, ...history].slice(0, 12);
+
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(nextHistory));
+}
+
+function renderHistory() {
+    const history = getHistory();
+
+    if (!history.length) {
+        historyList.innerHTML = `<p class="empty-history">아직 기록이 없습니다.</p>`;
+        return;
+    }
+
+    historyList.innerHTML = "";
+
+    history.forEach((item) => {
+        const div = document.createElement("div");
+        div.className = "history-item";
+
+        const timeText = item.responseTimeSec ? `${item.responseTimeSec}s` : "-";
+
+        div.innerHTML = `
+            <div class="history-item-top">
+                <span>${escapeHtml(item.agent)} · ${escapeHtml(item.provider)} · ${escapeHtml(item.model)}</span>
+                <span>${escapeHtml(timeText)}</span>
+            </div>
+            <p>${escapeHtml(item.prompt)}</p>
+            <p class="history-meta">${escapeHtml(item.createdAt)} · ${escapeHtml(item.version)}</p>
+        `;
+
+        div.addEventListener("click", () => {
+            promptInput.value = item.prompt;
+
+            modeValue.textContent = item.mode;
+            agentValue.textContent = item.agent;
+            providerValue.textContent = item.provider;
+            modelValue.textContent = item.model;
+            timeValue.textContent = item.responseTimeSec ? `${item.responseTimeSec}s` : "-";
+            versionValue.textContent = item.version;
+
+            setStatus("idle", "Loaded");
+        });
+
+        historyList.appendChild(div);
+    });
+}
+
+function clearHistory() {
+    localStorage.removeItem(HISTORY_KEY);
+    renderHistory();
+    setStatus("idle", "History Cleared");
+}
+
+function escapeHtml(value) {
+    return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
+
+document.querySelectorAll(".quick-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+        insertCommand(button.dataset.command);
+    });
 });
 
-promptInput.addEventListener("input", () => {
-  updateStatus(detectCommand(promptInput.value));
+runBtn.addEventListener("click", runAgent);
+clearBtn.addEventListener("click", clearInput);
+copyBtn.addEventListener("click", copyOutput);
+clearHistoryBtn.addEventListener("click", clearHistory);
+
+promptInput.addEventListener("keydown", (event) => {
+    if (event.ctrlKey && event.key === "Enter") {
+        runAgent();
+    }
 });
 
 renderHistory();
-updateStatus(detectCommand(promptInput.value));
+setStatus("idle", "Ready");
