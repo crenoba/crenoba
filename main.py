@@ -14,11 +14,12 @@ from pydantic import BaseModel, Field
 load_dotenv()
 
 from core.agent_loop import ComputerAgent
+from core.computer_command import ComputerCommandAgent
 from core.ai_client import AIClient
 from core.tool_router import ToolRouter
 
 
-APP_VERSION = "v0.10.0"
+APP_VERSION = "v0.10.1"
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -43,10 +44,16 @@ tool_router = ToolRouter(
     log_file=DATA_DIR / "action_logs.jsonl",
 )
 computer_agent = ComputerAgent(tool_router)
+computer_command_agent = ComputerCommandAgent(tool_router)
 
 
 class RelayRequest(BaseModel):
     prompt: str
+
+
+class ComputerChatRequest(BaseModel):
+    prompt: str = Field(min_length=1)
+    cwd: str = "."
 
 
 class ToolExecutionRequest(BaseModel):
@@ -103,6 +110,12 @@ def relay(req: RelayRequest):
         "response_time_sec": response_time_sec,
         "version": APP_VERSION,
     }
+
+
+@app.post("/computer/chat")
+def computer_chat(req: ComputerChatRequest):
+    result = computer_command_agent.run(prompt=req.prompt, cwd=req.cwd)
+    return {**result, "version": APP_VERSION}
 
 
 @app.get("/computer/tools")
