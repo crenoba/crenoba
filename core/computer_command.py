@@ -5,6 +5,7 @@ from time import perf_counter
 from typing import Any
 
 from core.agent_loop import ComputerAgent
+from core.approval_service import ApprovalService
 from core.tool_router import ToolRouter
 
 
@@ -12,23 +13,65 @@ COMPUTER_PREFIXES = ("/crenoba computer", "/computer")
 TEXT_FILE_PATTERN = re.compile(
     r"(?P<path>(?:[\w가-힣@()\[\]{}+,. -]+[\\/])*"
     r"[\w가-힣@()\[\]{}+,. -]+\."
-    r"(?:py|js|ts|html|css|json|md|txt|yaml|yml|toml|ini|cfg|env|log|csv|xml))",
+    r"(?:py|js|ts|html|css|json|md|txt|yaml|yml|toml|ini|cfg|log|csv|xml))",
     re.IGNORECASE,
 )
 QUOTED_PATH_PATTERN = re.compile(r"[\"'`](.+?)[\"'`]")
+FENCED_CONTENT_PATTERN = re.compile(
+    r"```(?:[a-zA-Z0-9_+-]+)?\s*\r?\n(?P<content>.*?)```",
+    re.DOTALL,
+)
+CONTENT_MARKER_PATTERN = re.compile(
+    r"(?ims)^\s*(?:내용|content)\s*:\s*(?:\r?\n)?(?P<content>.*)$"
+)
+COMMIT_MESSAGE_PATTERN = re.compile(
+    r"(?:커밋\s*메시지|메시지|message)\s*[:=]\s*"
+    r"(?:\"(?P<double>[^\"]+)\"|'(?P<single>[^']+)'|`(?P<backtick>[^`]+)`|(?P<plain>[^\r\n]+))",
+    re.IGNORECASE,
+)
 
 
 class ComputerCommandAgent:
-    """Route natural-language computer commands to safe, registered tools."""
+    """Route natural-language computer commands to safe registered tools."""
 
-    def __init__(self, tool_router: ToolRouter) -> None:
+    APPROVAL_ACTIONS = {"write_text_file", "git_add", "git_commit"}
+
+    def __init__(
+        self,
+        tool_router: ToolRouter,
+        approval_service: ApprovalService,
+    ) -> None:
         self.tool_router = tool_router
+        self.approval_service = approval_service
         self.inspector = ComputerAgent(tool_router)
 
     def run(self, prompt: str, cwd: str = ".") -> dict[str, Any]:
         started = perf_counter()
         request = self._strip_prefix(prompt)
-        action, arguments = self._select_action(request=request, cwd=cwd)
+        action, arguments, error = self._select_action(request=request, cwd=cwd)
+
+        if error:
+            return self._error_response(request, action, error, started)
+
+        if action in self.APPROVAL_ACTIONS:
+            prepared = self.approval_service.prepare(action, arguments)
+            elapsed = round(perf_counter() - started, 2)
+            return {
+                "success": prepared.get("success", False),
+                "output": self._format_approval_preview(action, request, prepared),
+                "mode": "computer",
+                "agent": self._agent_name(action),
+                "provider": "local-tools",
+                "model": "approval-rule-router",
+                "response_time_sec": elapsed,
+                "selected_tool": action,
+                "arguments": self._redact_arguments(action, arguments),
+                "requires_approval": prepared.get("requires_approval", False),
+                "action_id": prepared.get("action_id"),
+                "expires_at": prepared.get("expires_at"),
+                "preview": prepared.get("preview"),
+                "raw_result": prepared,
+            }
 
         if action == "inspect_project":
             raw_result = self.inspector.inspect_project(cwd=cwd)
@@ -48,7 +91,53 @@ class ComputerCommandAgent:
             "response_time_sec": elapsed,
             "selected_tool": action,
             "arguments": arguments,
+            "requires_approval": False,
             "raw_result": raw_result,
+        }
+
+    def format_approval_execution(self, payload: dict[str, Any]) -> dict[str, Any]:
+        tool = payload.get("tool", "computer_action")
+        success = payload.get("success", False)
+        result = payload.get("result") or {}
+        lines = [
+            "[CRENOBA Computer Agent]",
+            f"승인 작업: {tool}",
+            f"상태: {'실행 완료' if success else '실행 실패'}",
+            "",
+        ]
+        if success:
+            lines.append(self._format_tool_result(tool, result))
+        else:
+            lines.append(str(payload.get("message", "작업 실행에 실패했습니다.")))
+
+        return {
+            **payload,
+            "output": "\n".join(lines),
+            "mode": "computer",
+            "agent": self._agent_name(tool),
+            "provider": "local-tools",
+            "model": "approved-action-executor",
+            "response_time_sec": payload.get("elapsed_sec", 0),
+        }
+
+    def format_cancel_result(self, payload: dict[str, Any]) -> dict[str, Any]:
+        cancelled = payload.get("success", False)
+        return {
+            **payload,
+            "output": "\n".join(
+                [
+                    "[CRENOBA Computer Agent]",
+                    f"승인 작업: {payload.get('tool', 'unknown')}",
+                    f"상태: {'취소됨' if cancelled else '취소 실패'}",
+                    "",
+                    str(payload.get("message", "작업을 취소했습니다.")),
+                ]
+            ),
+            "mode": "computer",
+            "agent": "approval_manager",
+            "provider": "local-tools",
+            "model": "approval-store",
+            "response_time_sec": 0,
         }
 
     @staticmethod
@@ -60,59 +149,152 @@ class ComputerCommandAgent:
                 return text[len(prefix) :].strip()
         return text
 
-    def _select_action(self, request: str, cwd: str) -> tuple[str, dict[str, Any]]:
+    def _select_action(
+        self,
+        request: str,
+        cwd: str,
+    ) -> tuple[str, dict[str, Any], str | None]:
         text = request.lower().strip()
         path = self._extract_path(request)
 
         if not text:
-            return "inspect_project", {"cwd": cwd}
+            return "inspect_project", {"cwd": cwd}, None
+
+        if any(keyword in text for keyword in ("git push", "푸시", "push 해")):
+            return "blocked_request", {}, "git push는 현재 버전에서 안전을 위해 차단되어 있습니다."
+        if any(keyword in text for keyword in ("git reset", "리셋", "파일 삭제", "삭제해", "지워줘")):
+            return "blocked_request", {}, "삭제·reset 작업은 현재 버전에서 차단되어 있습니다."
+
+        write_keywords = ("저장해", "작성해", "생성해", "덮어써", "교체해", "파일 수정")
+        if any(keyword in text for keyword in write_keywords):
+            write_path = self._extract_quoted_text_path(request)
+            if not write_path:
+                return "write_text_file", {}, "수정할 파일 경로를 따옴표로 입력해주세요."
+            content = self._extract_write_content(request)
+            if content is None:
+                return (
+                    "write_text_file",
+                    {},
+                    "저장할 내용이 필요합니다. 요청 아래에 `내용:`을 적거나 코드 블록(```)으로 내용을 넣어주세요.",
+                )
+            return "write_text_file", {"path": write_path, "content": content}, None
+
+        if "commit" in text or "커밋" in text:
+            message = self._extract_commit_message(request)
+            if not message:
+                return (
+                    "git_commit",
+                    {},
+                    '커밋 메시지를 입력해주세요. 예: 커밋 메시지: "feat: add approval flow"',
+                )
+            return "git_commit", {"cwd": cwd, "message": message}, None
+
+        if "git add" in text or "스테이징" in text or "스테이지" in text:
+            paths = self._extract_git_add_paths(request)
+            if not paths:
+                return (
+                    "git_add",
+                    {},
+                    '대상 파일을 따옴표로 입력하거나 "모든 변경 파일"이라고 적어주세요.',
+                )
+            return "git_add", {"cwd": cwd, "paths": paths}, None
 
         if ("pip" in text and "버전" in text) or "pip version" in text:
-            return "pip_version", {}
+            return "pip_version", {}, None
 
         if any(keyword in text for keyword in ("파이썬 버전", "python 버전", "python version")):
-            return "python_version", {}
+            return "python_version", {}, None
 
         read_keywords = ("읽어", "내용 보여", "내용 확인", "파일 내용", "열어줘", "열어 줘")
         if path and any(keyword in text for keyword in read_keywords):
-            return "read_text_file", {"path": path}
+            return "read_text_file", {"path": path}, None
 
         if any(keyword in text for keyword in ("diff", "수정 내용", "변경 내용", "코드 차이", "차이점")):
             arguments: dict[str, Any] = {"cwd": cwd}
             if path:
                 arguments["path"] = path
-            return "git_diff", arguments
+            return "git_diff", arguments, None
 
         if any(keyword in text for keyword in ("변경 파일", "수정된 파일", "파일 이름", "name-status")):
-            return "git_diff_names", {"cwd": cwd}
+            return "git_diff_names", {"cwd": cwd}, None
 
         if any(keyword in text for keyword in ("변경 통계", "수정 통계", "diff stat", "통계")):
-            return "git_diff_stat", {"cwd": cwd}
+            return "git_diff_stat", {"cwd": cwd}, None
 
         if any(keyword in text for keyword in ("git 상태", "깃 상태", "git status", "브랜치 상태", "현재 브랜치")):
-            return "git_status", {"cwd": cwd}
+            return "git_status", {"cwd": cwd}, None
 
         if any(keyword in text for keyword in ("파일 목록", "폴더 목록", "프로젝트 구조", "디렉터리", "폴더 구조")):
-            return "list_files", {
-                "path": path or cwd,
-                "recursive": "전체" in text or "하위" in text,
-                "max_results": 200,
-            }
+            return (
+                "list_files",
+                {
+                    "path": path or cwd,
+                    "recursive": "전체" in text or "하위" in text,
+                    "max_results": 200,
+                },
+                None,
+            )
 
-        # Ambiguous inspection requests intentionally use the safe read-only bundle.
-        return "inspect_project", {"cwd": cwd}
+        return "inspect_project", {"cwd": cwd}, None
+
+    @staticmethod
+    def _extract_quoted_text_path(request: str) -> str | None:
+        for quoted in QUOTED_PATH_PATTERN.findall(request):
+            candidate = quoted.strip()
+            if TEXT_FILE_PATTERN.fullmatch(candidate):
+                return candidate
+        return None
 
     @staticmethod
     def _extract_path(request: str) -> str | None:
-        quoted = QUOTED_PATH_PATTERN.search(request)
-        if quoted:
-            return quoted.group(1).strip()
+        for quoted in QUOTED_PATH_PATTERN.findall(request):
+            if TEXT_FILE_PATTERN.fullmatch(quoted.strip()):
+                return quoted.strip()
 
         file_match = TEXT_FILE_PATTERN.search(request)
         if file_match:
             return file_match.group("path").strip()
-
         return None
+
+    @staticmethod
+    def _extract_write_content(request: str) -> str | None:
+        fenced = FENCED_CONTENT_PATTERN.search(request)
+        if fenced:
+            return fenced.group("content")
+
+        marked = CONTENT_MARKER_PATTERN.search(request)
+        if marked:
+            return marked.group("content")
+        return None
+
+    @staticmethod
+    def _extract_commit_message(request: str) -> str | None:
+        match = COMMIT_MESSAGE_PATTERN.search(request)
+        if match:
+            return next((value.strip() for value in match.groupdict().values() if value), None)
+
+        quoted_values = QUOTED_PATH_PATTERN.findall(request)
+        for value in reversed(quoted_values):
+            if not TEXT_FILE_PATTERN.fullmatch(value.strip()):
+                return value.strip()
+        return None
+
+    @staticmethod
+    def _extract_git_add_paths(request: str) -> list[str] | None:
+        lowered = request.lower()
+        if any(keyword in lowered for keyword in ("모든 변경", "전체 변경", "전부", "all changes")):
+            return ["."]
+
+        paths = [
+            value.strip()
+            for value in QUOTED_PATH_PATTERN.findall(request)
+            if TEXT_FILE_PATTERN.fullmatch(value.strip())
+        ]
+        if paths:
+            return paths
+
+        match = TEXT_FILE_PATTERN.search(request)
+        return [match.group("path").strip()] if match else None
 
     @staticmethod
     def _agent_name(action: str) -> str:
@@ -120,10 +302,13 @@ class ComputerCommandAgent:
             "inspect_project": "computer_inspector",
             "list_files": "file_inspector",
             "read_text_file": "file_reader",
+            "write_text_file": "file_writer",
             "git_status": "git_inspector",
             "git_diff_stat": "git_inspector",
             "git_diff_names": "git_inspector",
             "git_diff": "git_inspector",
+            "git_add": "git_operator",
+            "git_commit": "git_operator",
             "python_version": "system_inspector",
             "pip_version": "system_inspector",
         }
@@ -167,6 +352,76 @@ class ComputerCommandAgent:
                 formatted,
             ]
         )
+
+    def _format_approval_preview(
+        self,
+        action: str,
+        request: str,
+        payload: dict[str, Any],
+    ) -> str:
+        if not payload.get("success"):
+            return "\n".join(
+                [
+                    "[CRENOBA Computer Agent]",
+                    f"요청: {request}",
+                    f"선택 도구: {action}",
+                    "상태: 미리보기 생성 실패",
+                    "",
+                    str(payload.get("message", "승인 요청을 만들지 못했습니다.")),
+                ]
+            )
+
+        preview = payload.get("preview") or {}
+        lines = [
+            "[CRENOBA Computer Agent]",
+            f"요청: {request}",
+            f"선택 도구: {action}",
+            "권한: 사용자 승인 필요",
+            "상태: 실행 대기",
+            f"승인 만료: {payload.get('expires_at', '-')}",
+            "",
+            self._format_preview(action, preview),
+            "",
+            "아래 승인 버튼을 눌러야 실제 컴퓨터에 변경이 적용됩니다.",
+        ]
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_preview(action: str, preview: dict[str, Any]) -> str:
+        if action == "write_text_file":
+            return "\n".join(
+                [
+                    f"파일: {preview.get('path', '')}",
+                    f"작업: {preview.get('operation', '')}",
+                    f"크기: {preview.get('before_bytes', 0)} → {preview.get('after_bytes', 0)} bytes",
+                    "",
+                    "[변경 미리보기]",
+                    str(preview.get("diff", "")),
+                ]
+            )
+        if action == "git_add":
+            return "\n".join(
+                [
+                    f"대상: {', '.join(preview.get('paths', []))}",
+                    "자동 제외: .env*, .crenoba/**, data/action_logs.jsonl",
+                    "",
+                    "[현재 변경 파일]",
+                    str(preview.get("status_before", "")),
+                ]
+            )
+        if action == "git_commit":
+            return "\n".join(
+                [
+                    f"커밋 메시지: {preview.get('message', '')}",
+                    "",
+                    "[스테이징 파일]",
+                    str(preview.get("staged_files", "")),
+                    "",
+                    "[변경 통계]",
+                    str(preview.get("staged_stat", "")),
+                ]
+            )
+        return str(preview)
 
     def _format_inspection(
         self,
@@ -222,6 +477,36 @@ class ComputerCommandAgent:
                 content += "\n\n... 파일이 커서 일부만 표시했습니다."
             return "\n".join(header) + content
 
+        if action == "write_text_file":
+            lines = [
+                f"파일: {result.get('path', '')}",
+                f"작업: {result.get('operation', '')}",
+                f"크기: {result.get('size_bytes', 0)} bytes",
+            ]
+            if result.get("backup_path"):
+                lines.append(f"백업: {result.get('backup_path')}")
+            return "\n".join(lines)
+
+        if action == "git_add":
+            return "\n".join(
+                [
+                    f"스테이징 대상: {', '.join(result.get('paths', []))}",
+                    "",
+                    "[실행 후 Git 상태]",
+                    str(result.get("status_after", "")),
+                ]
+            )
+
+        if action == "git_commit":
+            return "\n".join(
+                [
+                    f"커밋 메시지: {result.get('message', '')}",
+                    f"생성된 커밋: {result.get('latest_commit', '')}",
+                    "",
+                    str(result.get("stdout", "")),
+                ]
+            ).rstrip()
+
         if action in {"git_status", "git_diff_stat", "git_diff_names", "git_diff"}:
             stdout = (result.get("stdout") or "").strip()
             stderr = (result.get("stderr") or "").strip()
@@ -241,3 +526,42 @@ class ComputerCommandAgent:
             return (result.get("stdout") or result.get("stderr") or "버전 정보를 찾지 못했습니다.").strip()
 
         return str(result)
+
+    @staticmethod
+    def _redact_arguments(action: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if action == "write_text_file":
+            content = str(arguments.get("content", ""))
+            return {
+                "path": arguments.get("path"),
+                "content_length": len(content),
+            }
+        return arguments
+
+    def _error_response(
+        self,
+        request: str,
+        action: str,
+        message: str,
+        started: float,
+    ) -> dict[str, Any]:
+        return {
+            "success": False,
+            "output": "\n".join(
+                [
+                    "[CRENOBA Computer Agent]",
+                    f"요청: {request or '-'}",
+                    f"선택 작업: {action}",
+                    "상태: 실행하지 않음",
+                    "",
+                    message,
+                ]
+            ),
+            "mode": "computer",
+            "agent": self._agent_name(action),
+            "provider": "local-tools",
+            "model": "approval-rule-router",
+            "response_time_sec": round(perf_counter() - started, 2),
+            "selected_tool": action,
+            "arguments": {},
+            "requires_approval": False,
+        }

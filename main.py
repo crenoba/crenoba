@@ -14,12 +14,14 @@ from pydantic import BaseModel, Field
 load_dotenv()
 
 from core.agent_loop import ComputerAgent
-from core.computer_command import ComputerCommandAgent
 from core.ai_client import AIClient
+from core.approval_service import ApprovalService
+from core.approval_store import ApprovalStore
+from core.computer_command import ComputerCommandAgent
 from core.tool_router import ToolRouter
 
 
-APP_VERSION = "v0.10.1"
+APP_VERSION = "v0.10.2"
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -43,8 +45,14 @@ tool_router = ToolRouter(
     workspace_root=WORKSPACE_ROOT,
     log_file=DATA_DIR / "action_logs.jsonl",
 )
+approval_store = ApprovalStore(ttl_minutes=15)
+approval_service = ApprovalService(
+    tool_router=tool_router,
+    approval_store=approval_store,
+    logger=tool_router.logger,
+)
 computer_agent = ComputerAgent(tool_router)
-computer_command_agent = ComputerCommandAgent(tool_router)
+computer_command_agent = ComputerCommandAgent(tool_router, approval_service)
 
 
 class RelayRequest(BaseModel):
@@ -59,7 +67,11 @@ class ComputerChatRequest(BaseModel):
 class ToolExecutionRequest(BaseModel):
     tool: str = Field(min_length=1)
     arguments: dict[str, Any] = Field(default_factory=dict)
-    approved: bool = False
+    approved: bool = False  # 호환성용. 직접 승인 우회에는 사용되지 않습니다.
+
+
+class ApprovalActionRequest(BaseModel):
+    action_id: str = Field(min_length=10)
 
 
 class ProjectInspectionRequest(BaseModel):
@@ -90,7 +102,8 @@ def health():
         "app": "CRENOBA",
         "version": APP_VERSION,
         "workspace": str(WORKSPACE_ROOT),
-        "computer_agent": "read_only",
+        "computer_agent": "approval_required_for_writes",
+        "approval_ttl_minutes": approval_store.ttl_minutes,
     }
 
 
@@ -118,6 +131,20 @@ def computer_chat(req: ComputerChatRequest):
     return {**result, "version": APP_VERSION}
 
 
+@app.post("/computer/approve")
+def computer_approve(req: ApprovalActionRequest):
+    result = approval_service.approve(req.action_id)
+    formatted = computer_command_agent.format_approval_execution(result)
+    return {**formatted, "version": APP_VERSION}
+
+
+@app.post("/computer/cancel")
+def computer_cancel(req: ApprovalActionRequest):
+    result = approval_service.cancel(req.action_id)
+    formatted = computer_command_agent.format_cancel_result(result)
+    return {**formatted, "version": APP_VERSION}
+
+
 @app.get("/computer/tools")
 def computer_tools():
     return {
@@ -130,10 +157,11 @@ def computer_tools():
 
 @app.post("/computer/execute")
 def computer_execute(req: ToolExecutionRequest):
+    # 직접 API 호출로 승인 작업을 우회하지 못하도록 approved 값은 의도적으로 무시합니다.
     result = tool_router.execute(
         tool_name=req.tool,
         arguments=req.arguments,
-        approved=req.approved,
+        approved=False,
     )
     return {**result, "version": APP_VERSION}
 

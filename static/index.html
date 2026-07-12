@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>CRENOBA Agent System</title>
   <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/approval.css" />
 </head>
 <body>
   <div class="app-shell">
@@ -13,7 +14,7 @@
         <p class="eyebrow">CRENOBA Agent System</p>
         <h1>Turn ideas into executable systems.</h1>
         <p class="subtitle">
-          명령어를 입력하면 CRENOBA가 AI 응답 또는 안전한 로컬 Computer Agent를 자동 선택합니다.
+          조회 작업은 자동 실행하고, 파일 수정과 Git 작업은 미리보기를 확인한 뒤 승인합니다.
         </p>
       </div>
       <div class="hero-badge">
@@ -45,7 +46,7 @@
       </div>
       <div class="status-card">
         <span class="label">Version</span>
-        <strong id="versionValue">v0.10.1</strong>
+        <strong id="versionValue">v0.10.2</strong>
       </div>
     </section>
 
@@ -71,7 +72,7 @@
 
         <textarea
           id="promptInput"
-          placeholder="/crenoba computer&#10;현재 프로젝트의 Git 상태와 변경 파일을 확인해줘"
+          placeholder="/crenoba computer&#10;파일 &quot;notes.txt&quot;에 다음 내용을 저장해줘&#10;내용:&#10;CRENOBA 승인 기능 테스트"
         ></textarea>
 
         <div class="button-row">
@@ -85,10 +86,27 @@
         <div class="panel-header">
           <div>
             <h2>Output</h2>
-            <p>Agent 응답과 로컬 작업 결과가 여기에 표시됩니다.</p>
+            <p>Agent 응답, 작업 미리보기, 실행 결과가 여기에 표시됩니다.</p>
           </div>
         </div>
         <pre id="outputBox">아직 실행된 명령이 없습니다.</pre>
+
+        <div id="approvalPanel" class="approval-panel" hidden>
+          <div class="approval-heading">
+            <div>
+              <strong>컴퓨터 변경 승인 필요</strong>
+              <p id="approvalSummary">변경 미리보기를 확인해주세요.</p>
+            </div>
+            <span class="approval-badge">1회용 승인</span>
+          </div>
+          <p class="approval-warning">
+            승인하면 위 미리보기의 작업이 실제 컴퓨터에 한 번만 적용됩니다.
+          </p>
+          <div class="approval-actions">
+            <button id="approveBtn" class="approve-btn">Approve & Execute</button>
+            <button id="cancelApprovalBtn" class="cancel-approval-btn">Cancel</button>
+          </div>
+        </div>
       </section>
     </main>
 

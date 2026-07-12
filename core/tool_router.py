@@ -46,18 +46,25 @@ class ToolRouter:
                 arguments=arguments,
             )
             elapsed = round(perf_counter() - started, 3)
+            tool_success = bool(result.get("success", True))
             response = {
-                "success": True,
+                "success": tool_success,
                 "tool": tool_name,
                 "risk_level": decision.risk_level,
                 "requires_approval": False,
-                "message": "도구 실행을 완료했습니다.",
+                "message": (
+                    "도구 실행을 완료했습니다."
+                    if tool_success
+                    else result.get("stderr") or result.get("stdout") or "도구 실행에 실패했습니다."
+                ),
                 "elapsed_sec": elapsed,
                 "result": result,
             }
-            self.logger.write({"event": "tool_executed", **response})
+            self.logger.write(
+                {"event": "tool_executed" if tool_success else "tool_failed", **response}
+            )
             return response
-        except Exception as exc:  # API boundary: convert tool errors into a stable response.
+        except Exception as exc:
             elapsed = round(perf_counter() - started, 3)
             response = {
                 "success": False,

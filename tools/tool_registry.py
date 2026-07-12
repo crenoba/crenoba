@@ -4,8 +4,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from tools.file_tools import list_files, read_text_file
-from tools.git_tools import git_diff, git_diff_names, git_diff_stat, git_status
+from tools.file_tools import list_files, read_text_file, write_text_file
+from tools.git_tools import (
+    git_add,
+    git_commit,
+    git_diff,
+    git_diff_names,
+    git_diff_stat,
+    git_status,
+)
 from tools.shell_tools import pip_version, python_version
 
 
@@ -30,6 +37,11 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
         description="작업 폴더 안의 텍스트 파일을 읽습니다.",
         function=read_text_file,
     ),
+    "write_text_file": ToolDefinition(
+        name="write_text_file",
+        description="승인 후 작업 폴더 안의 텍스트 파일을 생성하거나 전체 교체합니다.",
+        function=write_text_file,
+    ),
     "git_status": ToolDefinition(
         name="git_status",
         description="현재 Git 브랜치와 변경 파일을 조회합니다.",
@@ -49,6 +61,16 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
         name="git_diff",
         description="Git 변경 내용을 텍스트 diff로 조회합니다.",
         function=git_diff,
+    ),
+    "git_add": ToolDefinition(
+        name="git_add",
+        description="승인 후 지정한 변경 파일을 Git staging area에 추가합니다.",
+        function=git_add,
+    ),
+    "git_commit": ToolDefinition(
+        name="git_commit",
+        description="승인 후 현재 staging area의 변경 사항을 커밋합니다.",
+        function=git_commit,
     ),
     "python_version": ToolDefinition(
         name="python_version",

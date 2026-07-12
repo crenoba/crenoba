@@ -32,7 +32,6 @@ class PermissionManager:
     }
 
     APPROVAL_TOOLS = {
-        # Reserved for later versions.
         "write_text_file",
         "git_add",
         "git_commit",
@@ -58,12 +57,12 @@ class PermissionManager:
                 return PermissionDecision(
                     allowed=True,
                     risk_level=RiskLevel.APPROVAL_REQUIRED,
-                    reason="사용자 승인이 확인되었습니다.",
+                    reason="일회성 사용자 승인이 확인되었습니다.",
                 )
             return PermissionDecision(
                 allowed=False,
                 risk_level=RiskLevel.APPROVAL_REQUIRED,
-                reason="컴퓨터 상태를 변경하는 작업이므로 사용자 승인이 필요합니다.",
+                reason="컴퓨터 상태를 변경하는 작업이므로 미리보기와 사용자 승인이 필요합니다.",
             )
 
         if tool_name in self.BLOCKED_TOOLS:
