@@ -1,19 +1,9 @@
-# core/command_parser.py
+# =========================
+# CRENOBA COMMAND PARSER
+# v0.9.6
+# =========================
 
-"""
-CRENOBA Command Parser
-
-역할:
-- 사용자가 입력한 /crenoba 명령어를 분석한다.
-- main.py에서 사용할 mode 값을 안정적으로 반환한다.
-
-v0.7.3 수정:
-- 여러 줄 입력에서도 첫 줄의 명령어를 정확히 감지한다.
-- /crenoba task 입력이 반드시 mode="task"로 반환되도록 한다.
-"""
-
-
-VALID_CREN0BA_MODES = {
+SUPPORTED_AGENTS = {
     "task",
     "study",
     "code",
@@ -21,91 +11,141 @@ VALID_CREN0BA_MODES = {
     "project",
     "apollo",
     "relay",
+    "general",
 }
 
 
-def _get_first_line(text: str) -> str:
-    if not text:
-        return ""
-
-    return text.strip().splitlines()[0].strip()
-
-
-def _clean_prompt(text: str, mode: str) -> str:
+def parse_command(prompt: str) -> dict:
     """
-    입력에서 첫 줄 명령어만 제거하고 실제 내용만 남긴다.
-    """
-    if not text:
-        return ""
+    사용자 입력에서 CRENOBA 명령어를 분석한다.
 
-    lines = text.strip().splitlines()
+    예:
+    /crenoba code
+    파이썬 에러 고쳐줘
 
-    if not lines:
-        return ""
-
-    first_line = lines[0].strip().lower()
-
-    command = f"/crenoba {mode}"
-
-    if first_line.startswith(command):
-        return "\n".join(lines[1:]).strip()
-
-    return text.strip()
-
-
-def parse_command(text: str) -> dict:
-    """
-    사용자 입력을 분석해서 command/mode/agent 정보를 반환한다.
-
-    반환 예:
+    결과:
     {
-        "command": "/crenoba task",
-        "mode": "task",
-        "agent": "task",
-        "raw": "...",
-        "cleaned": "..."
+        "command": "/crenoba code",
+        "mode": "code",
+        "agent": "code",
+        "content": "파이썬 에러 고쳐줘"
     }
     """
-    raw_text = text or ""
-    first_line = _get_first_line(raw_text)
-    lowered = first_line.lower()
 
-    if lowered.startswith("/crenoba"):
-        parts = lowered.split()
+    if not prompt:
+        return _default_result("")
 
-        if len(parts) >= 2:
-            mode = parts[1].strip()
+    raw_text = prompt.strip()
+    lines = raw_text.splitlines()
 
-            if mode in VALID_CREN0BA_MODES:
+    first_line = lines[0].strip()
+    rest_lines = lines[1:]
+
+    tokens = first_line.split()
+
+    if not tokens:
+        return _default_result(raw_text)
+
+    first_token = tokens[0].lower()
+
+    # =========================
+    # /crenoba <agent>
+    # =========================
+
+    if first_token == "/crenoba":
+        if len(tokens) >= 2:
+            candidate_agent = tokens[1].lower()
+
+            if candidate_agent in SUPPORTED_AGENTS:
+                inline_content = " ".join(tokens[2:]).strip()
+                rest_content = "\n".join(rest_lines).strip()
+                content = _join_content(inline_content, rest_content)
+
                 return {
-                    "command": f"/crenoba {mode}",
-                    "mode": mode,
-                    "agent": mode,
-                    "raw": raw_text,
-                    "cleaned": _clean_prompt(raw_text, mode),
+                    "command": f"/crenoba {candidate_agent}",
+                    "mode": candidate_agent,
+                    "agent": candidate_agent,
+                    "content": content,
                 }
 
         return {
             "command": "/crenoba",
             "mode": "general",
             "agent": "general",
-            "raw": raw_text,
-            "cleaned": raw_text.strip(),
+            "content": "\n".join(rest_lines).strip(),
         }
 
-    if lowered.startswith("/gpt"):
-        return {
-            "command": "/gpt",
-            "mode": "gpt",
-            "agent": "gpt",
-            "raw": raw_text,
-            "cleaned": raw_text.strip(),
-        }
+    # =========================
+    # Short commands: /code, /task ...
+    # =========================
 
+    if first_token.startswith("/"):
+        candidate_agent = first_token.replace("/", "").strip().lower()
+
+        if candidate_agent in SUPPORTED_AGENTS:
+            inline_content = " ".join(tokens[1:]).strip()
+            rest_content = "\n".join(rest_lines).strip()
+            content = _join_content(inline_content, rest_content)
+
+            return {
+                "command": first_token,
+                "mode": candidate_agent,
+                "agent": candidate_agent,
+                "content": content,
+            }
+
+    # =========================
+    # GPT workflow commands
+    # =========================
+
+    if first_token == "/gpt":
+        if len(tokens) >= 2:
+            gpt_command = tokens[1].lower()
+
+            if gpt_command == "relay":
+                return {
+                    "command": "/gpt relay",
+                    "mode": "relay",
+                    "agent": "relay",
+                    "content": raw_text,
+                }
+
+            if gpt_command == "finish":
+                return {
+                    "command": "/gpt finish",
+                    "mode": "project",
+                    "agent": "project",
+                    "content": raw_text,
+                }
+
+            if gpt_command == "restore":
+                return {
+                    "command": "/gpt restore",
+                    "mode": "relay",
+                    "agent": "relay",
+                    "content": raw_text,
+                }
+
+    return _default_result(raw_text)
+
+
+def _default_result(content: str) -> dict:
     return {
-        "command": "plain",
+        "command": None,
         "mode": "general",
         "agent": "general",
-        "raw": raw_text,
-        "cleaned": raw_text.strip(),
+        "content": content,
     }
+
+
+def _join_content(inline_content: str, rest_content: str) -> str:
+    if inline_content and rest_content:
+        return f"{inline_content}\n{rest_content}"
+
+    if inline_content:
+        return inline_content
+
+    if rest_content:
+        return rest_content
+
+    return ""

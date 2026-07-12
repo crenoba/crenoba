@@ -1,9 +1,12 @@
-import os
 from dataclasses import dataclass
 
-from dotenv import load_dotenv
-
-load_dotenv()
+from config import (
+    APP_VERSION,
+    get_model_for_agent,
+    get_provider_for_agent,
+    normalize_agent,
+    normalize_provider,
+)
 
 
 @dataclass
@@ -12,126 +15,64 @@ class RouteResult:
     agent: str
     provider: str
     model: str
+    version: str
+
+    def to_dict(self) -> dict:
+        return {
+            "mode": self.mode,
+            "agent": self.agent,
+            "provider": self.provider,
+            "model": self.model,
+            "version": self.version,
+        }
 
 
 class ProviderRouter:
     """
-    CRENOBA v0.9.4
-    Agent별 Provider / Model 자동 라우팅 담당
+    CRENOBA v0.9.6 Provider Router
+
+    역할:
+    - /crenoba code  → Code Agent 감지
+    - /crenoba apollo → Apollo Agent 감지
+    - Agent별 Provider 선택
+    - Agent별 Model 선택
+
+    .env 예:
+    CODE_PROVIDER=ollama
+    CODE_OLLAMA_MODEL=qwen2.5-coder:7b-instruct
+
+    APOLLO_PROVIDER=ollama
+    APOLLO_OLLAMA_MODEL=qwen2.5-coder:7b-instruct
     """
 
-    def __init__(self):
-        self.provider_mode = os.getenv("AI_PROVIDER_MODE", "auto").lower().strip()
+    def resolve(self, mode: str | None = None, agent: str | None = None) -> RouteResult:
+        resolved_agent = self._resolve_agent(mode=mode, agent=agent)
+        resolved_mode = self._resolve_mode(mode=mode, agent=resolved_agent)
 
-    def route(self, user_input: str) -> RouteResult:
-        agent = self._detect_agent(user_input)
-        mode = agent
+        provider = get_provider_for_agent(resolved_agent)
+        provider = normalize_provider(provider)
 
-        if self.provider_mode == "manual":
-            provider = os.getenv("AI_PROVIDER", "ollama").lower().strip()
-            model = self._get_model_for_provider(provider, "DEFAULT")
-        else:
-            provider = self._get_agent_provider(agent)
-            model = self._get_agent_model(agent, provider)
+        model = get_model_for_agent(resolved_agent, provider)
 
         return RouteResult(
-            mode=mode,
-            agent=agent,
+            mode=resolved_mode,
+            agent=resolved_agent,
             provider=provider,
             model=model,
+            version=APP_VERSION,
         )
 
-    def _detect_agent(self, user_input: str) -> str:
-        text = (user_input or "").strip().lower()
+    def _resolve_agent(self, mode: str | None, agent: str | None) -> str:
+        if agent:
+            return normalize_agent(agent)
 
-        if not text:
-            return "general"
-
-        first_line = text.splitlines()[0].strip()
-
-        command_map = {
-            "/crenoba code": "code",
-            "/code": "code",
-
-            "/crenoba task": "task",
-            "/task": "task",
-
-            "/crenoba study": "study",
-            "/study": "study",
-
-            "/crenoba report": "report",
-            "/report": "report",
-
-            "/crenoba project": "project",
-            "/project": "project",
-
-            "/crenoba apollo": "apollo",
-            "/apollo": "apollo",
-
-            "/crenoba relay": "relay",
-            "/relay": "relay",
-        }
-
-        for command, agent in command_map.items():
-            if first_line.startswith(command):
-                return agent
+        if mode:
+            return normalize_agent(mode)
 
         return "general"
 
-    def _get_agent_provider(self, agent: str) -> str:
-        agent_key = f"{agent.upper()}_PROVIDER"
+    def _resolve_mode(self, mode: str | None, agent: str) -> str:
+        if mode:
+            return normalize_agent(mode)
 
-        return os.getenv(
-            agent_key,
-            os.getenv("DEFAULT_PROVIDER", "ollama")
-        ).lower().strip()
-
-    def _get_agent_model(self, agent: str, provider: str) -> str:
-        agent_upper = agent.upper()
-        provider_upper = provider.upper()
-
-        candidates = [
-            f"{agent_upper}_{provider_upper}_MODEL",
-            f"{agent_upper}_MODEL",
-            f"DEFAULT_{provider_upper}_MODEL",
-            "DEFAULT_MODEL",
-        ]
-
-        for key in candidates:
-            value = os.getenv(key)
-            if value:
-                return value.strip()
-
-        return self._get_model_for_provider(provider, "DEFAULT")
-
-    def _get_model_for_provider(self, provider: str, prefix: str = "DEFAULT") -> str:
-        provider = provider.lower().strip()
-
-        if provider == "ollama":
-            return os.getenv(
-                f"{prefix}_OLLAMA_MODEL",
-                os.getenv("OLLAMA_MODEL", "qwen3:14b")
-            )
-
-        if provider == "openrouter":
-            return os.getenv(
-                f"{prefix}_OPENROUTER_MODEL",
-                os.getenv("OPENROUTER_MODEL", "openrouter/free")
-            )
-
-        if provider == "gemini":
-            return os.getenv(
-                f"{prefix}_GEMINI_MODEL",
-                os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
-            )
-
-        if provider == "openai":
-            return os.getenv(
-                f"{prefix}_OPENAI_MODEL",
-                os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-            )
-
-        if provider == "mock":
-            return "mock-model"
-
-        return "unknown-model"
+        return normalize_agent(agent)
