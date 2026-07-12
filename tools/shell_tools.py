@@ -51,8 +51,8 @@ def run_command(
         "command": command,
         "cwd": str(working_directory),
         "return_code": completed.returncode,
-        "stdout": completed.stdout.strip(),
-        "stderr": completed.stderr.strip(),
+        "stdout": completed.stdout.rstrip(),
+        "stderr": completed.stderr.rstrip(),
         "success": completed.returncode == 0,
     }
 

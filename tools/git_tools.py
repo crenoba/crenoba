@@ -80,7 +80,14 @@ def preview_git_add(
         "operation": "git add",
         "status_before": status_text,
         "status_sha256": _sha256(status_text),
-        "automatic_exclusions": [".crenoba/**", "data/action_logs.jsonl", ".env*"],
+        "automatic_exclusions": [
+            ".crenoba/**",
+            "data/action_logs.jsonl",
+            ".env*",
+            ".venv/**",
+            "**/__pycache__/**",
+            ".pytest_cache/**",
+        ],
         "sensitive_excluded": sensitive,
     }
 
@@ -105,16 +112,10 @@ def git_add(
         )
 
     if selected_paths == ["."]:
-        command = [
-            "git",
-            "add",
-            "--all",
-            "--",
-            ".",
-            ":(exclude).crenoba/**",
-            ":(exclude)data/action_logs.jsonl",
-            ":(exclude).env*",
-        ]
+        safe_paths = _extract_safe_status_paths(current_text)
+        if not safe_paths:
+            raise RuntimeError("스테이징할 안전한 변경 파일이 없습니다.")
+        command = ["git", "add", "--all", "--", *safe_paths]
     else:
         command = ["git", "add", "--", *selected_paths]
 
@@ -251,12 +252,62 @@ def _validate_commit_message(message: str) -> str:
     return clean
 
 
+def _status_path(line: str) -> str:
+    """Extract a path from `git status --short` without losing its first character.
+
+    `run_command` now preserves leading spaces, but this parser also accepts output
+    that was previously normalized with `.strip()`.
+    """
+    if not line:
+        return ""
+
+    # Normal porcelain v1 form: two status columns, one separator, then the path.
+    if len(line) >= 3 and line[2] == " ":
+        path_text = line[3:]
+    # Compatibility form when a leading status-space was removed, e.g.
+    # ` M tools/a.py` became `M tools/a.py`.
+    elif len(line) >= 2 and line[1] == " ":
+        path_text = line[2:]
+    else:
+        parts = line.split(maxsplit=1)
+        path_text = parts[1] if len(parts) == 2 else line
+
+    path_text = path_text.strip()
+    if " -> " in path_text:
+        path_text = path_text.split(" -> ", 1)[1]
+    return path_text.strip()
+
+
+def _extract_safe_status_paths(status_text: str) -> list[str]:
+    safe_paths: list[str] = []
+    for line in status_text.splitlines():
+        path_text = _status_path(line)
+        if not path_text:
+            continue
+
+        normalized = path_text.replace("\\", "/")
+        name = Path(path_text).name.lower()
+
+        path_parts = {part.lower() for part in Path(normalized).parts}
+        if normalized == ".crenoba" or normalized.startswith(".crenoba/"):
+            continue
+        if normalized == "data/action_logs.jsonl":
+            continue
+        if path_parts & {".venv", "venv", "__pycache__", ".pytest_cache"}:
+            continue
+        if name in SENSITIVE_GIT_NAMES or name.startswith(".env"):
+            continue
+        if path_text not in safe_paths:
+            safe_paths.append(path_text)
+    return safe_paths
+
+
 def _find_sensitive_status_paths(status_text: str) -> list[str]:
     found: list[str] = []
     for line in status_text.splitlines():
-        path_text = line[3:].strip() if len(line) >= 4 else line.strip()
-        if " -> " in path_text:
-            path_text = path_text.split(" -> ", 1)[1]
+        path_text = _status_path(line)
+        if not path_text:
+            continue
         name = Path(path_text).name.lower()
         if name in SENSITIVE_GIT_NAMES or name.startswith(".env"):
             found.append(path_text)
