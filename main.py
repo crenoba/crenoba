@@ -21,7 +21,7 @@ from core.computer_command import ComputerCommandAgent
 from core.tool_router import ToolRouter
 
 
-APP_VERSION = "v0.10.2"
+APP_VERSION = "v0.11.0-dev.1"
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -102,7 +102,8 @@ def health():
         "app": "CRENOBA",
         "version": APP_VERSION,
         "workspace": str(WORKSPACE_ROOT),
-        "computer_agent": "approval_required_for_writes",
+        "computer_agent": "safe_code_checks_and_approval_required_for_writes",
+        "safe_test_tools": ["python_compile_file", "python_compile_all", "run_pytest"],
         "approval_ttl_minutes": approval_store.ttl_minutes,
     }
 

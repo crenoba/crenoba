@@ -53,9 +53,11 @@ class ToolRouter:
                 "risk_level": decision.risk_level,
                 "requires_approval": False,
                 "message": (
-                    "도구 실행을 완료했습니다."
+                    "도구 실행이 완료되었습니다."
                     if tool_success
-                    else result.get("stderr") or result.get("stdout") or "도구 실행에 실패했습니다."
+                    else result.get("stderr")
+                    or result.get("stdout")
+                    or "도구 실행에 실패했습니다."
                 ),
                 "elapsed_sec": elapsed,
                 "result": result,

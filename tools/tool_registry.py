@@ -14,6 +14,7 @@ from tools.git_tools import (
     git_status,
 )
 from tools.shell_tools import pip_version, python_version
+from tools.test_tools import python_compile_all, python_compile_file, run_pytest
 
 
 ToolFunction = Callable[..., dict[str, Any]]
@@ -81,6 +82,21 @@ TOOL_REGISTRY: dict[str, ToolDefinition] = {
         name="pip_version",
         description="현재 pip 버전을 조회합니다.",
         function=pip_version,
+    ),
+    "python_compile_file": ToolDefinition(
+        name="python_compile_file",
+        description="지정한 Python 파일을 py_compile로 안전하게 문법 검사합니다.",
+        function=python_compile_file,
+    ),
+    "python_compile_all": ToolDefinition(
+        name="python_compile_all",
+        description="지정한 프로젝트 폴더의 Python 파일을 compileall로 검사합니다.",
+        function=python_compile_all,
+    ),
+    "run_pytest": ToolDefinition(
+        name="run_pytest",
+        description="임의 옵션 없이 pytest를 안전하게 실행합니다.",
+        function=run_pytest,
     ),
 }
 

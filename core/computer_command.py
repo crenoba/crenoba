@@ -30,6 +30,28 @@ COMMIT_MESSAGE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+PYTHON_SYNTAX_KEYWORDS = (
+    "문법 검사",
+    "문법 오류",
+    "syntax check",
+    "syntax error",
+    "py_compile",
+    "compileall",
+    "컴파일 검사",
+    "파이썬 프로젝트 검사",
+    "python 프로젝트 검사",
+)
+PYTEST_KEYWORDS = (
+    "pytest",
+    "파이테스트",
+    "테스트 실행",
+    "테스트해",
+    "테스트 해",
+    "테스트 돌려",
+    "테스트를 실행",
+)
+SAFE_CHECK_ACTIONS = {"python_compile_file", "python_compile_all", "run_pytest"}
+
 
 class ComputerCommandAgent:
     """Route natural-language computer commands to safe registered tools."""
@@ -165,6 +187,26 @@ class ComputerCommandAgent:
         if any(keyword in text for keyword in ("git reset", "리셋", "파일 삭제", "삭제해", "지워줘")):
             return "blocked_request", {}, "삭제·reset 작업은 현재 버전에서 차단되어 있습니다."
 
+        if any(keyword in text for keyword in PYTEST_KEYWORDS):
+            arguments: dict[str, Any] = {"cwd": cwd}
+            test_target = path or self._extract_quoted_general_path(request)
+            if test_target:
+                arguments["path"] = test_target
+            return "run_pytest", arguments, None
+
+        if any(keyword in text for keyword in PYTHON_SYNTAX_KEYWORDS):
+            if path:
+                if not path.lower().endswith(".py"):
+                    return "python_compile_file", {}, "Python 문법 검사는 .py 파일만 지원합니다."
+                return "python_compile_file", {"path": path, "cwd": cwd}, None
+
+            target_directory = self._extract_quoted_general_path(request) or cwd
+            return (
+                "python_compile_all",
+                {"path": target_directory, "cwd": cwd},
+                None,
+            )
+
         write_keywords = ("저장해", "작성해", "생성해", "덮어써", "교체해", "파일 수정")
         if any(keyword in text for keyword in write_keywords):
             write_path = self._extract_quoted_text_path(request)
@@ -257,6 +299,14 @@ class ComputerCommandAgent:
         return None
 
     @staticmethod
+    def _extract_quoted_general_path(request: str) -> str | None:
+        for quoted in QUOTED_PATH_PATTERN.findall(request):
+            candidate = quoted.strip()
+            if candidate and not candidate.startswith("```"):
+                return candidate
+        return None
+
+    @staticmethod
     def _extract_write_content(request: str) -> str | None:
         fenced = FENCED_CONTENT_PATTERN.search(request)
         if fenced:
@@ -311,6 +361,9 @@ class ComputerCommandAgent:
             "git_commit": "git_operator",
             "python_version": "system_inspector",
             "pip_version": "system_inspector",
+            "python_compile_file": "code_inspector",
+            "python_compile_all": "code_inspector",
+            "run_pytest": "test_runner",
         }
         return names.get(action, "computer_agent")
 
@@ -326,7 +379,28 @@ class ComputerCommandAgent:
         if action == "inspect_project":
             return self._format_inspection(title, request_text, payload)
 
-        if not payload.get("success", False):
+        success = payload.get("success", False)
+        result = payload.get("result") or {}
+
+        if action in SAFE_CHECK_ACTIONS:
+            formatted = (
+                self._format_tool_result(action, result)
+                if result
+                else str(payload.get("message", "검사 도구 실행에 실패했습니다."))
+            )
+            return "\n".join(
+                [
+                    title,
+                    f"요청: {request_text}",
+                    f"선택 도구: {action}",
+                    "권한: 안전 검사 자동 실행",
+                    f"상태: {'통과' if success else '실패'}",
+                    "",
+                    formatted,
+                ]
+            )
+
+        if not success:
             message = payload.get("message", "도구 실행에 실패했습니다.")
             return "\n".join(
                 [
@@ -339,7 +413,6 @@ class ComputerCommandAgent:
                 ]
             )
 
-        result = payload.get("result") or {}
         formatted = self._format_tool_result(action, result)
         return "\n".join(
             [
@@ -521,6 +594,27 @@ class ComputerCommandAgent:
                 "git_diff": "표시할 코드 변경 내용이 없습니다.",
             }
             return messages[action]
+
+        if action in SAFE_CHECK_ACTIONS:
+            command = " ".join(str(part) for part in result.get("command", []))
+            stdout = (result.get("stdout") or "").strip()
+            stderr = (result.get("stderr") or "").strip()
+            success = bool(result.get("success", False))
+            lines = [
+                f"검사 대상: {result.get('target', '.')}",
+                f"실행 명령: {command or '-'}",
+                f"종료 코드: {result.get('return_code', '-')}",
+                "",
+            ]
+            if stdout:
+                lines.extend(["[stdout]", stdout])
+            if stderr:
+                if stdout:
+                    lines.append("")
+                lines.extend(["[stderr]", stderr])
+            if not stdout and not stderr:
+                lines.append("검사를 통과했습니다." if success else "검사 결과가 출력되지 않았습니다.")
+            return "\n".join(lines)
 
         if action in {"python_version", "pip_version"}:
             return (result.get("stdout") or result.get("stderr") or "버전 정보를 찾지 못했습니다.").strip()
