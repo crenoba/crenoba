@@ -20,12 +20,13 @@ const modelValue = document.getElementById("modelValue");
 const timeValue = document.getElementById("timeValue");
 const versionValue = document.getElementById("versionValue");
 
-const HISTORY_KEY = "crenoba_command_history_v0102";
+const HISTORY_KEY = "crenoba_command_history_v0110_dev1";
 const LEGACY_HISTORY_KEYS = [
+  "crenoba_command_history_v0102",
   "crenoba_command_history_v0101",
   "crenoba_command_history_v0952",
 ];
-const APP_VERSION = "v0.10.2";
+const APP_VERSION = "v0.11.0-dev.1";
 
 let currentPendingActionId = null;
 let currentPendingPrompt = "";
@@ -47,8 +48,9 @@ function updateMetadata(data) {
 }
 
 function isComputerCommand(prompt) {
-  const firstLine = prompt.split("\n", 1)[0].trim().toLowerCase();
-  return firstLine === "/crenoba computer" || firstLine === "/computer";
+  const normalized = String(prompt || "").trimStart().toLowerCase();
+
+  return /^\/(?:crenoba\s+computer|computer)(?:\s|$)/.test(normalized);
 }
 
 function showApproval(data, prompt) {
